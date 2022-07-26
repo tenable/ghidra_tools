@@ -1,6 +1,6 @@
 # Ghidra Decomp Extractor
 
-
+Python script to extract all Ghidra function decompilations from the currently loaded program.
 
 
 
