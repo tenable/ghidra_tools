@@ -12,7 +12,7 @@ Python script to extract all Ghidra function decompilations from the currently l
 
 * Start ghidra bridge background server
 
-  ![image-20220726143115698](/Users/dinobytes/dev/ghidra_tools/extract_decomps/assets/image-20220726143115698.png)
+  ![image-20220726143115698](./assets/image-20220726143115698.png)
 
 * Don't forget to shut down the Ghidra Bridge when you're getting ready to close the analysis window!
 
