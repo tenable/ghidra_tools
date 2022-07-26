@@ -18,7 +18,7 @@ Hello, dino!
 
 3. Start the Ghidra Bridge
 
-   ![image-20220726141542478](/Users/dinobytes/dev/ghidra_tools/extract_decomps/example/assets/image-20220726141542478.png)
+   ![image-20220726141542478](./assets/image-20220726141542478.png)
 
 4. Run the extraction script
 
