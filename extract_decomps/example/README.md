@@ -43,4 +43,4 @@ Hello, dino!
    └── entry@100003edc.c
    ```
 
-5. Verify output as needed![image-20220726141821528](/Users/dinobytes/dev/ghidra_tools/extract_decomps/example/assets/image-20220726141821528.png)
+5. Verify output as needed![image-20220726141821528](./assets/image-20220726141821528.png)
