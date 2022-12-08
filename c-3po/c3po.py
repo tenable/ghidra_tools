@@ -6,37 +6,31 @@
 #@toolbar
 
 import subprocess as sp
+import textwrap
 import logging
+from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL
 import json
 import os
 import re
-try:
-    from ghidra.app.script import GhidraScript
-    from ghidra.program.model.listing import Function, FunctionManager
-    from ghidra.program.model.mem import MemoryAccessException
-    from ghidra.util.exception import DuplicateNameException
-    from ghidra.program.model.symbol import SourceType
-except ImportError:
-    print("I guess we're in the repl, huh?")
-    pass
+from ghidra.app.script import GhidraScript
+from ghidra.program.model.listing import Function, FunctionManager
+from ghidra.program.model.mem import MemoryAccessException
+from ghidra.util.exception import DuplicateNameException
+from ghidra.program.model.symbol import SourceType
 
 
-SOURCE = "OpenAI GPT-3"
-TAG = SOURCE + " generated comment, take with a grain of salt:"
-TEXTMODEL = "text-davinci-003"
-CODEMODEL = "code-davinci-002"
-MODEL = TEXTMODEL
-LISTING = None
-TIMEOUT = 6000
-MAXTOKENS = 512
-#STYLE = "the voice of C-3PO"
-C3POSAY = True
-STYLE = "English"
-
-LOGGER = logging.getLogger()
-LOGGER.setLevel(logging.INFO)
-
-
+##########################################################################################
+# Script Configuration
+##########################################################################################
+MODEL = "text-davinci-003" # Choose which large language model we query
+TEMPERATURE = 0.19 # Set higher for more adventurous comments, lower for more conservative
+TIMEOUT = 600      # How many seconds should we wait for a response from OpenAI?
+MAXTOKENS = 512    # The maximum number of tokens to request from OpenAI
+C3POSAY = True     # True if you want the cute C-3PO ASCII art, False otherwise
+STYLE = "English"  # Feel free to tweak the style here, and see what happens.
+EXTRA = ""         # Extra text appended to the prompt.
+LOGLEVEL = INFO    # Adjust for more or less line noise in the console.
+COMMENTWIDTH = 80  # How wide the comment, inside the little speech balloon, should be.
 C3POASCII = r"""
           /~\
          |oo )
@@ -52,26 +46,38 @@ C3POASCII = r"""
          | | |
         /_]_[_\
 """
+##########################################################################################
 
-COMMENTWIDTH = 80
+
+SCRIPTDIR = os.path.dirname(os.path.realpath(__file__))
+ICONPATH = os.path.join(SCRIPTDIR, "c3po.png")
+# Now how do I set the icon? I'm not sure.
+SOURCE = "OpenAI GPT-3"
+TAG = SOURCE + " generated comment, take with a grain of salt:"
+FOOTER = "Model: {model}, Temperature: {temperature}".format(model=MODEL, temperature=TEMPERATURE)
+
+logging.getLogger().setLevel(LOGLEVEL)
+
+def flatten_list(l):
+    return [item for sublist in l for item in sublist]
 
 def wordwrap(s, width=COMMENTWIDTH, pad=True):
     """Wrap a string to a given number of characters, but don't break words."""
-    # first, find the original line breaks
-    words = s.split()
-    lines = []
-    while words:
-        line = ""
-        while words and len(line) + len(words[0]) < width:
-            line += words.pop(0) + " "
-        lines.append(line)
+    # first replace single line breaks with double line breaks
+    lines = [textwrap.TextWrapper(width=width, 
+                                 break_long_words=False, 
+                                 break_on_hyphens=True, 
+                                 replace_whitespace=False).wrap(L)
+            for L in s.splitlines()]
+    # now flatten the lines list
+    lines = flatten_list(lines)
     if pad:
         lines = [line.ljust(width) for line in lines]
     return "\n".join(lines)
 
 def boxedtext(text, width=COMMENTWIDTH, tag=TAG):
-    wrapped = wordwrap(text, width)
-    wrapped = "\n".join([tag.ljust(width), " ".ljust(width), wrapped])
+    wrapped = wordwrap(text, width, pad=True)
+    wrapped = "\n".join([tag.ljust(width), " ".ljust(width), wrapped, " ".ljust(width), FOOTER.ljust(width)])
     side_bordered = "|" + wrapped.replace("\n", "|\n|") + "|"
     top_border = "/" + "-" * (len(side_bordered.split("\n")[0]) - 2) + "\\"
     bottom_border = top_border[::-1]
@@ -130,21 +136,13 @@ def openai_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
 
 
 def get_current_function():
-    global LISTING
-    try:
-        if LISTING is None:
-            LISTING = currentProgram.getListing()
-        function = LISTING.getFunctionContaining(currentAddress)
-        return function
-    except Exception as e:
-        logging.error("Failed to get current function: {e}".format(e=e))
-        return None
+    listing = currentProgram.getListing()
+    function = listing.getFunctionContaining(currentAddress)
+    return function
 
 def decompile_current_function(function=None):
     if function is None:
         function = get_current_function()
-
-
     logging.info("Current address is at {currentAddress}".format(currentAddress=currentAddress.__str__()))
     logging.info("Decompiling function: {function_name} at {function_entrypoint}".format(function_name=function.getName(), function_entrypoint=function.getEntryPoint().__str__()))
     decomp = ghidra.app.decompiler.DecompInterface()
@@ -171,33 +169,13 @@ def generate_comment(c_code, temperature=0.19, program_info=None, prompt=None, m
 {c_code}
 ```
 
-Please provide a detailed explanation of what this code does, in {style}, that might be useful to a reverse engineer. Explain your reasoning as much as possible. Finally, suggest a suitable name for this function.
+Please provide a detailed explanation of what this code does, in {style}, that might be useful to a reverse engineer. Explain your reasoning as much as possible. Finally, suggest a suitable name for this function and for each variable bearing a default name, offer a more informative name, if the purpose of that variable is unambiguous.
 
 """.format(intro=intro, c_code=c_code, style=STYLE)
     print("Prompt:\n\n{prompt}".format(prompt=prompt))
-    response = openai_request(prompt=prompt, temperature=temperature, max_tokens=max_tokens, model=TEXTMODEL)
+    response = openai_request(prompt=prompt, temperature=temperature, max_tokens=max_tokens, model=MODEL)
     try:
         res = response['choices'][0]['text'].strip()
-        print(res)
-        return res
-    except Exception as e:
-        logging.error("Failed to get response: {e}".format(e=e))
-        return None
-
-def generate_comment_alt(c_code, temperature=0.19, program_info=None, prompt=None, model=CODEMODEL, max_tokens=MAXTOKENS):
-    intro = "The purpose of this function is to "
-    if prompt is None:
-        prompt = """{c_code}
-
-/**
-The purpose of the function above is to
-""".format(c_code=c_code)
-    print("Prompt:\n\n{prompt}".format(prompt=prompt))
-    response = openai_request(prompt=prompt, temperature=temperature, max_tokens=max_tokens, model=model)
-    try:
-        print(response)
-        res = response['choices'][0]['text'].strip()
-        res = intro + res
         print(res)
         return res
     except Exception as e:
@@ -233,8 +211,8 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
         comment = c3posay(comment)
     else:
         comment = TAG + "\n" + comment
-    #print(comment)
-    function = LISTING.getFunctionContaining(currentAddress)
+    listing = currentProgram.getListing()
+    function = listing.getFunctionContaining(currentAddress)
     try:
         function.setComment(comment)
     except DuplicateNameException as e:
