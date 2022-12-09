@@ -23,14 +23,15 @@ from ghidra.program.model.symbol import SourceType
 # Script Configuration
 ##########################################################################################
 MODEL = "text-davinci-003" # Choose which large language model we query
-TEMPERATURE = 0.19 # Set higher for more adventurous comments, lower for more conservative
-TIMEOUT = 600      # How many seconds should we wait for a response from OpenAI?
-MAXTOKENS = 512    # The maximum number of tokens to request from OpenAI
-C3POSAY = True     # True if you want the cute C-3PO ASCII art, False otherwise
-STYLE = "English"  # Feel free to tweak the style here, and see what happens.
-EXTRA = ""         # Extra text appended to the prompt.
-LOGLEVEL = INFO    # Adjust for more or less line noise in the console.
-COMMENTWIDTH = 80  # How wide the comment, inside the little speech balloon, should be.
+TEMPERATURE = 0.19    # Set higher for more adventurous comments, lower for more conservative
+TIMEOUT = 600         # How many seconds should we wait for a response from OpenAI?
+MAXTOKENS = 512       # The maximum number of tokens to request from OpenAI
+C3POSAY = True        # True if you want the cute C-3PO ASCII art, False otherwise
+LANGUAGE = "English"  # This can also be used as a style parameter for the comment
+EXTRA = ""            # Extra text appended to the prompt.
+#EXTRA = "but write everything in the form of a sonnet" # for example
+LOGLEVEL = INFO       # Adjust for more or less line noise in the console.
+COMMENTWIDTH = 80     # How wide the comment, inside the little speech balloon, should be.
 C3POASCII = r"""
           /~\
          |oo )
@@ -169,9 +170,9 @@ def generate_comment(c_code, temperature=0.19, program_info=None, prompt=None, m
 {c_code}
 ```
 
-Please provide a detailed explanation of what this code does, in {style}, that might be useful to a reverse engineer. Explain your reasoning as much as possible. Finally, suggest a suitable name for this function and for each variable bearing a default name, offer a more informative name, if the purpose of that variable is unambiguous.
+Please provide a detailed explanation of what this code does, in {style}, that might be useful to a reverse engineer. Explain your reasoning as much as possible. Finally, suggest a suitable name for this function and for each variable bearing a default name, offer a more informative name, if the purpose of that variable is unambiguous. {extra}
 
-""".format(intro=intro, c_code=c_code, style=STYLE)
+""".format(intro=intro, c_code=c_code, style=LANGUAGE, extra=EXTRA)
     print("Prompt:\n\n{prompt}".format(prompt=prompt))
     response = openai_request(prompt=prompt, temperature=temperature, max_tokens=max_tokens, model=MODEL)
     try:
