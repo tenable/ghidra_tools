@@ -68,7 +68,7 @@ def wordwrap(s, width=COMMENTWIDTH, pad=True):
     lines = [textwrap.TextWrapper(width=width, 
                                  break_long_words=False, 
                                  break_on_hyphens=True, 
-                                 replace_whitespace=False).wrap(L)
+                                 replace_whitespace=False).wrap("    " + L)
             for L in s.splitlines()]
     # now flatten the lines list
     lines = flatten_list(lines)
