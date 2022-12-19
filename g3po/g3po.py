@@ -22,6 +22,7 @@ from ghidra.program.model.symbol import SourceType
 ##########################################################################################
 # Script Configuration
 ##########################################################################################
+#MODEL = "text-curie-001" # Choose which large language model we query
 MODEL = "text-davinci-003" # Choose which large language model we query
 TEMPERATURE = 0.19    # Set higher for more adventurous comments, lower for more conservative
 TIMEOUT = 600         # How many seconds should we wait for a response from OpenAI?
@@ -140,6 +141,8 @@ def get_current_function():
     listing = currentProgram.getListing()
     function = listing.getFunctionContaining(currentAddress)
     return function
+
+
 
 def decompile_current_function(function=None):
     if function is None:
