@@ -28,6 +28,7 @@ TEMPERATURE = 0.19    # Set higher for more adventurous comments, lower for more
 TIMEOUT = 600         # How many seconds should we wait for a response from OpenAI?
 MAXTOKENS = 512       # The maximum number of tokens to request from OpenAI
 C3POSAY = True        # True if you want the cute C-3PO ASCII art, False otherwise
+#LANGUAGE = "the form of a sonnet"  # This can also be used as a style parameter for the comment
 LANGUAGE = "English"  # This can also be used as a style parameter for the comment
 EXTRA = ""            # Extra text appended to the prompt.
 #EXTRA = "but write everything in the form of a sonnet" # for example
