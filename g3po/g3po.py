@@ -64,6 +64,7 @@ logging.getLogger().setLevel(LOGLEVEL)
 def flatten_list(l):
     return [item for sublist in l for item in sublist]
 
+
 def wordwrap(s, width=COMMENTWIDTH, pad=True):
     """Wrap a string to a given number of characters, but don't break words."""
     # first replace single line breaks with double line breaks
@@ -78,6 +79,7 @@ def wordwrap(s, width=COMMENTWIDTH, pad=True):
         lines = [line.ljust(width) for line in lines]
     return "\n".join(lines)
 
+
 def boxedtext(text, width=COMMENTWIDTH, tag=TAG):
     wrapped = wordwrap(text, width, pad=True)
     wrapped = "\n".join([tag.ljust(width), " ".ljust(width), wrapped, " ".ljust(width), FOOTER.ljust(width)])
@@ -86,10 +88,12 @@ def boxedtext(text, width=COMMENTWIDTH, tag=TAG):
     bottom_border = top_border[::-1]
     return top_border + "\n" + side_bordered + "\n" + bottom_border
     
+
 def c3posay(text, width=COMMENTWIDTH, character=C3POASCII, tag=TAG):
     box = boxedtext(text, width, tag=tag)
     headwidth = len(character.split("\n")[1]) + 2
     return box + "\n" + " "*headwidth + "/" + character
+
 
 def escape_unescaped_single_quotes(s):
     return re.sub(r"(?<!\\)'", r"\\'", s)
@@ -161,6 +165,7 @@ def decompile_current_function(function=None):
     decomp_src = decomp_res.getDecompiledFunction().getC()
     return decomp_src
 
+
 def generate_comment(c_code, temperature=0.19, program_info=None, prompt=None, model=MODEL, max_tokens=MAXTOKENS):
     intro = "Below is some C code that Ghidra decompiled from a binary that I'm trying to reverse engineer."
     #program_info = get_program_info()
@@ -226,4 +231,105 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
     return comment
 
 
-add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
+comment = add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
+# comment = """
+# /* /--------------------------------------------------------------------------------\
+#    |OpenAI GPT-3 generated comment, take with a grain of salt:                      |
+#    |                                                                                |
+#    |    This code is a window procedure for a window created with the Windows API.  |
+#    |It handles messages sent to the window, such as WM_DESTROY, WM_PAINT, and       |
+#    |WM_COMMAND. It also handles custom messages sent to the window, such as 0x200   |
+#    |and 0x201.                                                                      |
+#    |    When the window receives a WM_DESTROY message, it deletes the device context|
+#    |and frees any memory allocated to the window. It then posts a quit message to   |
+#    |the application.                                                                |
+#    |    When the window receives a WM_PAINT message, it creates a device context if |
+#    |one does not already exist, and then blits the contents of the device context to|
+#    |the window.                                                                     |
+#    |    When the window receives a WM_COMMAND message, it checks the command ID and |
+#    |if it is 0x68, it displays a dialog box. If it is 0x69, it destroys the window. |
+#    |    When the window receives a custom message 0x200, it sets the window title to|
+#    |a string containing the coordinates of the mouse cursor and the number of       |
+#    |clicks.                                                                         |
+#    |    When the window receives a custom message 0x201, it checks if the           |
+#    |coordinates of the mouse cursor match the coordinates of a pixel in the device  |
+#    |context. If they do, it blits the contents of the device context to the window. |
+#    |If the coordinates do not match, it sets the window title to a string containing|
+#    |the coordinates of the mouse cursor and the number of clicks.                   |
+#    |    The function name could be "WindowProc" and the variables could be renamed  |
+#    |as follows:                                                                     |
+#    |    param_1 -> hwnd                                                             |
+#    |    param_2 -> message                                                          |
+#    |    param_3 -> wParam                                                           |
+#    |    param_4 -> lParam                                                           |
+#    |    sVar1 -> yCoord                                                             |
+#    |    pHVar2 -> hdc                                                               |
+#    |    hHeap -> hHeap                                                              |
+#    |    LVar3 -> lResult                                                            |
+#    |    uVar4 -> width                                                              |
+#    |    uVar5 -> height                                                             |
+#    |    uVar6 -> xCoord                                                             |
+#    |    iVar7 -> x                                                                  |
+#    |    uVar8 -> xCoordShort                                                        |
+#    |    iVar9 -> y                                                                  |
+#    |    dwFlags -> dwFlags                                                          |
+#    |    lpMem -> lpMem                                                              |
+#    |    local_148 -> szTitle                                                        |
+#    |    local_44 -> ps                                                              |
+#    |    DAT_004130e0 -> hInstance                                                   |
+#    |    DAT_004130e4 -> hBitmap                                                     |
+#    |    DAT_00412000 -> bInitialized                                                |
+#    |                                                                                |
+#    |Model: text-davinci-003, Temperature: 0.19                                      |
+#    \--------------------------------------------------------------------------------/
+#                   /
+#              /~\
+#             |oo )
+#             _\=/_
+#            /     \
+#           //|/.\|\\
+#          ||  \_/  ||
+#          || |\ /| ||
+#           # \_ _/  #
+#             | | |
+#             | | |
+#             []|[]
+#             | | |
+#            /_]_[_\
+#     */"""
+
+def parse_response_for_vars(comment):
+    """takes block comment from above, yields tuple of str old name & new name for each var"""
+    for line in comment.split('\n'):
+        if ' -> ' in line:
+            old, new = line.split(' -> ')
+            old = old.strip('| ')
+            new = new.strip('| ')
+            yield old, new
+
+
+def rename_var(old_name, new_name, func, variables):
+    """takes an old and new variable name and renames it
+        old_name: str, old variable name
+        new_name: str, new variable name
+        func: Function, func we're working in
+        variables: {str, Variable}, vars in the func we're working in """
+    var_to_rename = variables[old_name]
+    var_to_rename.setName(new_name, SourceType.USER_DEFINED)
+    var_to_rename.setComment('GP3O renamed this from {} to {}'.format(old_name, new_name))
+
+# TODO: ask gpt3 to give me a more parsable name :)
+def parse_response_for_func_name(comment):
+    pass
+
+print('applying gpt-3 variable names')
+
+func = get_current_function()
+raw_vars = func.getAllVariables().tolist()
+variables = {var.getName(): var for var in raw_vars}
+
+for old, new in parse_response_for_vars(comment):
+    rename_var(old, new, func, variables)
+
+
+
