@@ -5,7 +5,7 @@
 #@menupath
 #@toolbar
 
-import subprocess as sp
+import httplib
 import textwrap
 import logging
 from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL
@@ -32,7 +32,7 @@ C3POSAY = True        # True if you want the cute C-3PO ASCII art, False otherwi
 LANGUAGE = "English"  # This can also be used as a style parameter for the comment
 EXTRA = ""            # Extra text appended to the prompt.
 #EXTRA = "but write everything in the form of a sonnet" # for example
-LOGLEVEL = INFO       # Adjust for more or less line noise in the console.
+LOGLEVEL = DEBUG       # Adjust for more or less line noise in the console.
 COMMENTWIDTH = 80     # How wide the comment, inside the little speech balloon, should be.
 C3POASCII = r"""
           /~\
@@ -94,55 +94,54 @@ def c3posay(text, width=COMMENTWIDTH, character=C3POASCII, tag=TAG):
 def escape_unescaped_single_quotes(s):
     return re.sub(r"(?<!\\)'", r"\\'", s)
 
-# Example
-# $ curl https://api.openai.com/v1/completions -H "Content-Type: application/json" -H "Authorization: Bearer $OPENAI_API_KEY" -d '{"model": "text-davinci-003", "prompt": "Say this is a test", "temperature": 0, "max_tokens": 7}'
-def openai_request_cmd(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    if openai_api_key is None:
-        logging.error("OpenAI API key not found in environment variables!")
+
+def send_https_request(address, path, data, headers):
+    try:
+        conn = httplib.HTTPSConnection(address)
+        json_req_data = json.dumps(data)
+        conn.request("POST", path, json_req_data, headers)
+        response = conn.getresponse()
+        json_data = response.read()
+        conn.close()
+        try:
+            data = json.loads(json_data)
+            return data
+        except ValueError:
+            logging.error("Could not parse JSON response from OpenAI!")
+            logging.debug(json_data)
+            return None
+    except Exception as e:
+        logging.error("Error sending HTTPS request: {e}".format(e=e))
         return None
-    data = {
-      "model": MODEL,
-      "prompt": escape_unescaped_single_quotes(prompt), #prompt.replace("'", "\\'"),
-      "max_tokens": max_tokens,
-      "temperature": temperature
-    }
-    json_data = json.dumps(data)
-    url = "https://api.openai.com/v1/completions"
-    cmd = ["curl",
-           url,
-           "-H", "Content-Type: application/json",
-           "-H", "Authorization: Bearer {openai_api_key}".format(openai_api_key=openai_api_key),
-           "-d", json_data]
-    return cmd 
 
 
 def openai_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
-    cmd = openai_request_cmd(prompt, temperature=temperature, max_tokens=max_tokens)
-    cmdstr = " ".join(cmd)
-    logging.info("Running command: {cmdstr}".format(cmdstr=cmdstr))
-    res = sp.Popen(cmd, shell=False, stdout=sp.PIPE, stderr=sp.PIPE)
-    exitcode = res.wait()
-    out = res.stdout.read()
-    err = res.stderr.read()
-    if exitcode != 0:
-        logging.error("OpenAI request failed with exit code {exitcode}".format(exitcode=exitcode))
-        logging.error("Error: {err}".format(err=err))
+    data = {
+      "model": MODEL,
+      "prompt": prompt,
+      "max_tokens": max_tokens,
+      "temperature": temperature
+    }
+    # The URL is "https://api.openai.com/v1/completions"
+    host = "api.openai.com"
+    path = "/v1/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer {openai_api_key}".format(openai_api_key=os.getenv("OPENAI_API_KEY")),
+    }
+    data = send_https_request(host, path, data, headers)
+    if data is None:
+        logging.error("OpenAI request failed!")
         return None
-    logging.info("OpenAI request succeeded with exit code {exitcode}".format(exitcode=exitcode))
-    logging.info("Response: {out}".format(out=out))
-    try:
-        return json.loads(out)
-    except Exception as e:
-        logging.error("Failed to parse JSON response: {e}".format(e=e))
-        return None
+    logging.info("OpenAI request succeeded!")
+    logging.info("Response: {data}".format(data=data))
+    return data
 
 
 def get_current_function():
     listing = currentProgram.getListing()
     function = listing.getFunctionContaining(currentAddress)
     return function
-
 
 
 def decompile_current_function(function=None):
