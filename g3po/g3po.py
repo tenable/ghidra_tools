@@ -18,6 +18,10 @@ from ghidra.program.model.mem import MemoryAccessException
 from ghidra.util.exception import DuplicateNameException
 from ghidra.program.model.symbol import SourceType
 
+from ghidra.app.decompiler import DecompileOptions
+from ghidra.app.decompiler import DecompInterface
+from ghidra.util.task import ConsoleTaskMonitor
+from ghidra.program.flatapi import FlatProgramAPI 
 
 ##########################################################################################
 # Script Configuration
@@ -34,6 +38,7 @@ EXTRA = ""            # Extra text appended to the prompt.
 #EXTRA = "but write everything in the form of a sonnet" # for example
 LOGLEVEL = DEBUG       # Adjust for more or less line noise in the console.
 COMMENTWIDTH = 80     # How wide the comment, inside the little speech balloon, should be.
+APPLYRESULTS = True   # Rename variables per G3PO's predictions 
 C3POASCII = r"""
           /~\
          |oo )
@@ -60,6 +65,10 @@ TAG = SOURCE + " generated comment, take with a grain of salt:"
 FOOTER = "Model: {model}, Temperature: {temperature}".format(model=MODEL, temperature=TEMPERATURE)
 
 logging.getLogger().setLevel(LOGLEVEL)
+
+state = getState()
+program = state.getCurrentProgram()
+fp = FlatProgramAPI(program)
 
 def flatten_list(l):
     return [item for sublist in l for item in sublist]
@@ -305,31 +314,85 @@ def parse_response_for_vars(comment):
             old, new = line.split(' -> ')
             old = old.strip('| ')
             new = new.strip('| ')
+            if old == new:
+                continue
             yield old, new
 
 
-def rename_var(old_name, new_name, func, variables):
-    """takes an old and new variable name and renames it
+def rename_var(old_name, new_name, variables):
+    """takes an old and new variable name from listing and renames it
         old_name: str, old variable name
         new_name: str, new variable name
-        func: Function, func we're working in
         variables: {str, Variable}, vars in the func we're working in """
-    var_to_rename = variables[old_name]
-    var_to_rename.setName(new_name, SourceType.USER_DEFINED)
-    var_to_rename.setComment('GP3O renamed this from {} to {}'.format(old_name, new_name))
+    try:
+        var_to_rename = variables.get(old_name)
+        if var_to_rename:
+            var_to_rename.setName(new_name, SourceType.USER_DEFINED)
+            var_to_rename.setComment('GP3O renamed this from {} to {}'.format(old_name, new_name))
+            logging.debug('GP3O renamed variable {} to {}'.format(old_name, new_name))
+        else:
+            logging.debug('GP3O wanted to rename variable {} to {}, but no Variable found'.format(old_name, new_name))
 
-# TODO: ask gpt3 to give me a more parsable name :)
-def parse_response_for_func_name(comment):
-    pass
-
-print('applying gpt-3 variable names')
-
-func = get_current_function()
-raw_vars = func.getAllVariables().tolist()
-variables = {var.getName(): var for var in raw_vars}
-
-for old, new in parse_response_for_vars(comment):
-    rename_var(old, new, func, variables)
+    # only deals with listing vars, need to work with decomp to get the rest
+    except KeyError:
+        pass
 
 
+def rename_high_sym(old_name, new_name, symbols):
+    """takes an old and new symbols from decompiler name and renames it
+        old_name: str, old variable name
+        new_name: str, new variable name
+        symbols: {str, Symbol}, symbols in the func we're working in """
+    var_to_rename = symbols.get(old_name)
+    if var_to_rename:
+        var_to_rename.setName(new_name,  SourceType.USER_DEFINED)
+        logging.debug('GP3O renamed symbol {} to {}'.format(old_name, new_name))
+    else:
+        logging.debug('GP3O wanted to rename symbol {} to {}, but no Symbol found'.format(old_name, new_name))
 
+
+# https://github.com/NationalSecurityAgency/ghidra/issues/1561#issuecomment-590025081
+def rename_data(old_name, new_name):
+    """takes an old and new data name, finds the data and renames it
+        old_name: str, old variable name of the form DAT_{addr}
+        new_name: str, new variable name"""
+    address = int(old_name.strip('DAT_'), 16)
+    sym = fp.getSymbolAt(fp.toAddr(address))
+    sym.setName(new_name, SourceType.USER_DEFINED)
+    logging.debug('GP3O renamed Data {} to {}'.format(old_name, new_name))
+
+
+def apply_variable_predictions(comment):
+    logging.info('Applying gpt-3 variable names')
+
+    func = get_current_function()
+    raw_vars = func.getAllVariables().tolist()
+    variables = {var.getName(): var for var in raw_vars}
+
+
+    # # John coming in clutch again
+    # # https://github.com/NationalSecurityAgency/ghidra/issues/2143#issuecomment-665300865
+    # options = DecompileOptions()
+    # monitor = ConsoleTaskMonitor()
+    # ifc = DecompInterface()
+    # ifc.setOptions(options)
+    # ifc.openProgram(func.getProgram())
+    # res = ifc.decompileFunction(func, 60, monitor)
+    # high_func = res.getHighFunction()
+    # lsm = high_func.getLocalSymbolMap()
+    # symbols = lsm.getSymbols()
+
+
+    # # Can only set names for Symbols, not all High Symbols have Symbols backing them :(((
+    # symbols = {var.getName(): var.getSymbol() for var in symbols}
+
+
+    for old, new in parse_response_for_vars(comment):
+        if old.startswith('DAT_'):
+            rename_data(old, new)
+        else:
+            rename_var(old, new, variables)
+            # rename_high_sym(old, new, symbols)
+
+if APPLYRESULTS:
+    apply_variable_predictions(comment)
