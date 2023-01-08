@@ -187,7 +187,7 @@ def generate_comment(c_code, temperature=0.19, program_info=None, prompt=None, m
 {c_code}
 ```
 
-Please provide a detailed explanation of what this code does, in {style}, that might be useful to a reverse engineer. Explain your reasoning as much as possible. Finally, suggest a suitable name for this function and for each variable bearing a default name, offer a more informative name, if the purpose of that variable is unambiguous. {extra}
+Please provide a detailed explanation of what this code does, in {style}, that might be useful to a reverse engineer. Explain your reasoning as much as possible. Finally, suggest a suitable name for this function and for each variable bearing a default name, offer a more informative name, if the purpose of that variable is unambiguous. Print each variable suggestion on its own line in the form "old name" -> "new name" and the suggested function name on it's own line in the form "old name" :: "new name". {extra} 
 
 """.format(intro=intro, c_code=c_code, style=LANGUAGE, extra=EXTRA)
     print("Prompt:\n\n{prompt}".format(prompt=prompt))
@@ -241,72 +241,7 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
 
 
 comment = add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
-# comment = """
-# /* /--------------------------------------------------------------------------------\
-#    |OpenAI GPT-3 generated comment, take with a grain of salt:                      |
-#    |                                                                                |
-#    |    This code is a window procedure for a window created with the Windows API.  |
-#    |It handles messages sent to the window, such as WM_DESTROY, WM_PAINT, and       |
-#    |WM_COMMAND. It also handles custom messages sent to the window, such as 0x200   |
-#    |and 0x201.                                                                      |
-#    |    When the window receives a WM_DESTROY message, it deletes the device context|
-#    |and frees any memory allocated to the window. It then posts a quit message to   |
-#    |the application.                                                                |
-#    |    When the window receives a WM_PAINT message, it creates a device context if |
-#    |one does not already exist, and then blits the contents of the device context to|
-#    |the window.                                                                     |
-#    |    When the window receives a WM_COMMAND message, it checks the command ID and |
-#    |if it is 0x68, it displays a dialog box. If it is 0x69, it destroys the window. |
-#    |    When the window receives a custom message 0x200, it sets the window title to|
-#    |a string containing the coordinates of the mouse cursor and the number of       |
-#    |clicks.                                                                         |
-#    |    When the window receives a custom message 0x201, it checks if the           |
-#    |coordinates of the mouse cursor match the coordinates of a pixel in the device  |
-#    |context. If they do, it blits the contents of the device context to the window. |
-#    |If the coordinates do not match, it sets the window title to a string containing|
-#    |the coordinates of the mouse cursor and the number of clicks.                   |
-#    |    The function name could be "WindowProc" and the variables could be renamed  |
-#    |as follows:                                                                     |
-#    |    param_1 -> hwnd                                                             |
-#    |    param_2 -> message                                                          |
-#    |    param_3 -> wParam                                                           |
-#    |    param_4 -> lParam                                                           |
-#    |    sVar1 -> yCoord                                                             |
-#    |    pHVar2 -> hdc                                                               |
-#    |    hHeap -> hHeap                                                              |
-#    |    LVar3 -> lResult                                                            |
-#    |    uVar4 -> width                                                              |
-#    |    uVar5 -> height                                                             |
-#    |    uVar6 -> xCoord                                                             |
-#    |    iVar7 -> x                                                                  |
-#    |    uVar8 -> xCoordShort                                                        |
-#    |    iVar9 -> y                                                                  |
-#    |    dwFlags -> dwFlags                                                          |
-#    |    lpMem -> lpMem                                                              |
-#    |    local_148 -> szTitle                                                        |
-#    |    local_44 -> ps                                                              |
-#    |    DAT_004130e0 -> hInstance                                                   |
-#    |    DAT_004130e4 -> hBitmap                                                     |
-#    |    DAT_00412000 -> bInitialized                                                |
-#    |                                                                                |
-#    |Model: text-davinci-003, Temperature: 0.19                                      |
-#    \--------------------------------------------------------------------------------/
-#                   /
-#              /~\
-#             |oo )
-#             _\=/_
-#            /     \
-#           //|/.\|\\
-#          ||  \_/  ||
-#          || |\ /| ||
-#           # \_ _/  #
-#             | | |
-#             | | |
-#             []|[]
-#             | | |
-#            /_]_[_\
-#     */"""
-
+    
 def parse_response_for_vars(comment):
     """takes block comment from above, yields tuple of str old name & new name for each var"""
     for line in comment.split('\n'):
@@ -317,6 +252,15 @@ def parse_response_for_vars(comment):
             if old == new:
                 continue
             yield old, new
+
+
+def parse_response_for_name(comment):
+    """takes block comment from above, yields new function name"""
+    for line in comment.split('\n'):
+        if ' :: ' in line:
+            _, new = line.split(' :: ')
+            new = new.strip('| ')
+            return new
 
 
 def rename_var(old_name, new_name, variables):
@@ -369,30 +313,32 @@ def apply_variable_predictions(comment):
     raw_vars = func.getAllVariables().tolist()
     variables = {var.getName(): var for var in raw_vars}
 
+    # John coming in clutch again
+    # https://github.com/NationalSecurityAgency/ghidra/issues/2143#issuecomment-665300865
+    options = DecompileOptions()
+    monitor = ConsoleTaskMonitor()
+    ifc = DecompInterface()
+    ifc.setOptions(options)
+    ifc.openProgram(func.getProgram())
+    res = ifc.decompileFunction(func, 60, monitor)
+    high_func = res.getHighFunction()
+    lsm = high_func.getLocalSymbolMap()
+    symbols = lsm.getSymbols()
 
-    # # John coming in clutch again
-    # # https://github.com/NationalSecurityAgency/ghidra/issues/2143#issuecomment-665300865
-    # options = DecompileOptions()
-    # monitor = ConsoleTaskMonitor()
-    # ifc = DecompInterface()
-    # ifc.setOptions(options)
-    # ifc.openProgram(func.getProgram())
-    # res = ifc.decompileFunction(func, 60, monitor)
-    # high_func = res.getHighFunction()
-    # lsm = high_func.getLocalSymbolMap()
-    # symbols = lsm.getSymbols()
-
-
-    # # Can only set names for Symbols, not all High Symbols have Symbols backing them :(((
-    # symbols = {var.getName(): var.getSymbol() for var in symbols}
-
+    # Can only set names for Symbols, not all High Symbols have Symbols backing them :(((
+    symbols = {var.getName(): var.getSymbol() for var in symbols}
 
     for old, new in parse_response_for_vars(comment):
         if old.startswith('DAT_'):
             rename_data(old, new)
         else:
             rename_var(old, new, variables)
-            # rename_high_sym(old, new, symbols)
+            rename_high_sym(old, new, symbols)
+
+    new_func_name = parse_response_for_name(comment)
+    if new_func_name:
+        func.setName(new_func_name, SourceType.USER_DEFINED)
+        logging.debug('G3P0 renamed function to {}'.format(new_func_name))
 
 if APPLYRESULTS:
     apply_variable_predictions(comment)
