@@ -38,7 +38,7 @@ EXTRA = ""            # Extra text appended to the prompt.
 #EXTRA = "but write everything in the form of a sonnet" # for example
 LOGLEVEL = DEBUG       # Adjust for more or less line noise in the console.
 COMMENTWIDTH = 80     # How wide the comment, inside the little speech balloon, should be.
-APPLYRESULTS = True   # Rename variables per G3PO's predictions 
+APPLYRESULTS = True   # Rename function and variables per G3PO's predictions 
 C3POASCII = r"""
           /~\
          |oo )
@@ -243,7 +243,7 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
 comment = add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
     
 def parse_response_for_vars(comment):
-    """takes block comment from above, yields tuple of str old name & new name for each var"""
+    """takes block comment from GPT, yields tuple of str old name & new name for each var"""
     for line in comment.split('\n'):
         if ' -> ' in line:
             old, new = line.split(' -> ')
@@ -255,7 +255,7 @@ def parse_response_for_vars(comment):
 
 
 def parse_response_for_name(comment):
-    """takes block comment from above, yields new function name"""
+    """takes block comment from GPT, yields new function name"""
     for line in comment.split('\n'):
         if ' :: ' in line:
             _, new = line.split(' :: ')
