@@ -17,7 +17,7 @@ from ghidra.program.model.listing import Function, FunctionManager
 from ghidra.program.model.mem import MemoryAccessException
 from ghidra.util.exception import DuplicateNameException
 from ghidra.program.model.symbol import SourceType
-
+from ghidra.program.model.pcode import HighFunctionDBUtil
 from ghidra.app.decompiler import DecompileOptions
 from ghidra.app.decompiler import DecompInterface
 from ghidra.util.task import ConsoleTaskMonitor
@@ -36,7 +36,7 @@ C3POSAY = True        # True if you want the cute C-3PO ASCII art, False otherwi
 LANGUAGE = "English"  # This can also be used as a style parameter for the comment
 EXTRA = ""            # Extra text appended to the prompt.
 #EXTRA = "but write everything in the form of a sonnet" # for example
-LOGLEVEL = DEBUG       # Adjust for more or less line noise in the console.
+LOGLEVEL = INFO       # Adjust for more or less line noise in the console.
 COMMENTWIDTH = 80     # How wide the comment, inside the little speech balloon, should be.
 APPLYRESULTS = True   # Rename function and variables per G3PO's predictions 
 C3POASCII = r"""
@@ -66,9 +66,9 @@ FOOTER = "Model: {model}, Temperature: {temperature}".format(model=MODEL, temper
 
 logging.getLogger().setLevel(LOGLEVEL)
 
-state = getState()
-program = state.getCurrentProgram()
-fp = FlatProgramAPI(program)
+STATE = getState()
+PROGRAM = state.getCurrentProgram()
+FLATAPI = FlatProgramAPI(PROGRAM)
 
 def flatten_list(l):
     return [item for sublist in l for item in sublist]
@@ -187,7 +187,7 @@ def generate_comment(c_code, temperature=0.19, program_info=None, prompt=None, m
 {c_code}
 ```
 
-Please provide a detailed explanation of what this code does, in {style}, that might be useful to a reverse engineer. Explain your reasoning as much as possible. Finally, suggest a suitable name for this function and for each variable bearing a default name, offer a more informative name, if the purpose of that variable is unambiguous. Print each variable suggestion on its own line in the form "old name" -> "new name" and the suggested function name on it's own line in the form "old name" :: "new name". {extra} 
+Please provide a detailed explanation of what this code does, in {style}, that might be useful to a reverse engineer. Explain your reasoning as much as possible. Finally, suggest a suitable name for this function and for each variable bearing a default name, offer a more informative name, if the purpose of that variable is unambiguous. Print each suggested variable name on its own line in the form old_name -> new_name, and print the suggested function name on its own line in the form old_name :: new_name. {extra} 
 
 """.format(intro=intro, c_code=c_code, style=LANGUAGE, extra=EXTRA)
     print("Prompt:\n\n{prompt}".format(prompt=prompt))
@@ -240,7 +240,6 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
     return comment
 
 
-comment = add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
     
 def parse_response_for_vars(comment):
     """takes block comment from GPT, yields tuple of str old name & new name for each var"""
@@ -282,29 +281,38 @@ def rename_var(old_name, new_name, variables):
         pass
 
 
-def rename_high_sym(old_name, new_name, symbols):
-    """takes an old and new symbols from decompiler name and renames it
-        old_name: str, old variable name
-        new_name: str, new variable name
-        symbols: {str, Symbol}, symbols in the func we're working in """
-    var_to_rename = symbols.get(old_name)
-    if var_to_rename:
-        var_to_rename.setName(new_name,  SourceType.USER_DEFINED)
-        logging.debug('GP3O renamed symbol {} to {}'.format(old_name, new_name))
-    else:
-        logging.debug('GP3O wanted to rename symbol {} to {}, but no Symbol found'.format(old_name, new_name))
-
-
 # https://github.com/NationalSecurityAgency/ghidra/issues/1561#issuecomment-590025081
 def rename_data(old_name, new_name):
     """takes an old and new data name, finds the data and renames it
         old_name: str, old variable name of the form DAT_{addr}
         new_name: str, new variable name"""
     address = int(old_name.strip('DAT_'), 16)
-    sym = fp.getSymbolAt(fp.toAddr(address))
+    sym = FLATAPI.getSymbolAt(FLATAPI.toAddr(address))
     sym.setName(new_name, SourceType.USER_DEFINED)
     logging.debug('GP3O renamed Data {} to {}'.format(old_name, new_name))
 
+
+def rename_high_variable(hv, new_name, data_type=None):
+    """takes a high variable object, a new name, and, optionally, a data type
+    and sets the name and data type of the high variable in the program database"""
+
+    if data_type is None:
+        data_type = hv.getDataType()
+    return HighFunctionDBUtil.updateDBVariable(hv, 
+                unicode(new_name), 
+                data_type, 
+                SourceType.ANALYSIS)
+    
+
+def sanitize_variable_name(name):
+    """takes a variable name and returns a sanitized version that can be used as a variable name in Ghidra
+    name: str, variable name"""
+    # strip out any characters that aren't letters, numbers, or underscores
+    name = re.sub(r'[^a-zA-Z0-9_]', '', name)
+    # if the first character is a number, prepend an underscore
+    if name[0].isdigit():
+        name = 'x' + name
+    return name
 
 def apply_variable_predictions(comment):
     logging.info('Applying gpt-3 variable names')
@@ -320,25 +328,28 @@ def apply_variable_predictions(comment):
     ifc = DecompInterface()
     ifc.setOptions(options)
     ifc.openProgram(func.getProgram())
-    res = ifc.decompileFunction(func, 60, monitor)
+    res = ifc.decompileFunction(func, TIMEOUT, monitor)
     high_func = res.getHighFunction()
     lsm = high_func.getLocalSymbolMap()
     symbols = lsm.getSymbols()
-
-    # Can only set names for Symbols, not all High Symbols have Symbols backing them :(((
-    symbols = {var.getName(): var.getSymbol() for var in symbols}
+    symbols = {var.getName(): var for var in symbols}
 
     for old, new in parse_response_for_vars(comment):
-        if old.startswith('DAT_'):
+        new = sanitize_variable_name(new)
+        if re.match(r"^DAT_[0-9a-f]+$", old): # Globals with default names
             rename_data(old, new)
         else:
-            rename_var(old, new, variables)
-            rename_high_sym(old, new, symbols)
+            if old in symbols and symbols[old] is not None:
+                rename_high_variable(symbols[old], new)
 
-    new_func_name = parse_response_for_name(comment)
+    new_func_name = sanitize_variable_name(parse_response_for_name(comment))
     if new_func_name:
         func.setName(new_func_name, SourceType.USER_DEFINED)
         logging.debug('G3P0 renamed function to {}'.format(new_func_name))
 
-if APPLYRESULTS:
+
+
+comment = add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
+
+if comment is not None and APPLYRESULTS:
     apply_variable_predictions(comment)
