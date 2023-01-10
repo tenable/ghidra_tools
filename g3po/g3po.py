@@ -188,7 +188,7 @@ def generate_comment(c_code, temperature=0.19, program_info=None, prompt=None, m
 {c_code}
 ```
 
-Please provide a detailed explanation of what this code does, in {style}, that might be useful to a reverse engineer. Explain your reasoning as much as possible. Finally, suggest a suitable name for this function and for each variable bearing a default name, offer a more informative name, if the purpose of that variable is unambiguous. Print each suggested variable name on its own line in the form old_name -> new_name, and print the suggested function name on its own line in the form old_name :: new_name. {extra}
+Please explain what this code does, in {style}, and carefully explain your reasoning in a way that might be useful to a reverse engineer. Finally, suggest a suitable name for this function and suggest informative names for any variables whose purpose is clear. Print each suggested variable name on its own line in the form $old -> $new, where $old is the old name and $new is the  new name. Print the suggested function name on its own line in the form $old :: $new. {extra}
 
 """.format(intro=intro, c_code=c_code, style=LANGUAGE, extra=EXTRA)
     print("Prompt:\n\n{prompt}".format(prompt=prompt))
@@ -287,6 +287,7 @@ def rename_data(old_name, new_name):
     """takes an old and new data name, finds the data and renames it
         old_name: str, old variable name of the form DAT_{addr}
         new_name: str, new variable name"""
+    new_name = new_name.upper()
     address = int(old_name.strip('DAT_'), 16)
     sym = FLATAPI.getSymbolAt(FLATAPI.toAddr(address))
     sym.setName(new_name, SourceType.USER_DEFINED)
