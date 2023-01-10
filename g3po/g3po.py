@@ -21,7 +21,7 @@ from ghidra.program.model.pcode import HighFunctionDBUtil
 from ghidra.app.decompiler import DecompileOptions
 from ghidra.app.decompiler import DecompInterface
 from ghidra.util.task import ConsoleTaskMonitor
-from ghidra.program.flatapi import FlatProgramAPI 
+from ghidra.program.flatapi import FlatProgramAPI
 
 ##########################################################################################
 # Script Configuration
@@ -38,7 +38,7 @@ EXTRA = ""            # Extra text appended to the prompt.
 #EXTRA = "but write everything in the form of a sonnet" # for example
 LOGLEVEL = INFO       # Adjust for more or less line noise in the console.
 COMMENTWIDTH = 80     # How wide the comment, inside the little speech balloon, should be.
-APPLYRESULTS = True   # Rename function and variables per G3PO's predictions 
+APPLYRESULTS = True   # Rename function and variables per G3PO's predictions
 C3POASCII = r"""
           /~\
          |oo )
@@ -70,6 +70,7 @@ STATE = getState()
 PROGRAM = state.getCurrentProgram()
 FLATAPI = FlatProgramAPI(PROGRAM)
 
+
 def flatten_list(l):
     return [item for sublist in l for item in sublist]
 
@@ -77,9 +78,9 @@ def flatten_list(l):
 def wordwrap(s, width=COMMENTWIDTH, pad=True):
     """Wrap a string to a given number of characters, but don't break words."""
     # first replace single line breaks with double line breaks
-    lines = [textwrap.TextWrapper(width=width, 
-                                 break_long_words=False, 
-                                 break_on_hyphens=True, 
+    lines = [textwrap.TextWrapper(width=width,
+                                 break_long_words=False,
+                                 break_on_hyphens=True,
                                  replace_whitespace=False).wrap("    " + L)
             for L in s.splitlines()]
     # now flatten the lines list
@@ -96,7 +97,7 @@ def boxedtext(text, width=COMMENTWIDTH, tag=TAG):
     top_border = "/" + "-" * (len(side_bordered.split("\n")[0]) - 2) + "\\"
     bottom_border = top_border[::-1]
     return top_border + "\n" + side_bordered + "\n" + bottom_border
-    
+
 
 def c3posay(text, width=COMMENTWIDTH, character=C3POASCII, tag=TAG):
     box = boxedtext(text, width, tag=tag)
@@ -187,7 +188,7 @@ def generate_comment(c_code, temperature=0.19, program_info=None, prompt=None, m
 {c_code}
 ```
 
-Please provide a detailed explanation of what this code does, in {style}, that might be useful to a reverse engineer. Explain your reasoning as much as possible. Finally, suggest a suitable name for this function and for each variable bearing a default name, offer a more informative name, if the purpose of that variable is unambiguous. Print each suggested variable name on its own line in the form old_name -> new_name, and print the suggested function name on its own line in the form old_name :: new_name. {extra} 
+Please explain what this code does, in {style}, and carefully explain your reasoning in a way that might be useful to a reverse engineer. Finally, suggest a suitable name for this function and suggest informative names for any variables whose purpose is clear. Print each suggested variable name on its own line in the form $old -> $new, where $old is the old name and $new is the  new name. Print the suggested function name on its own line in the form $old :: $new. {extra}
 
 """.format(intro=intro, c_code=c_code, style=LANGUAGE, extra=EXTRA)
     print("Prompt:\n\n{prompt}".format(prompt=prompt))
@@ -240,7 +241,7 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
     return comment
 
 
-    
+
 def parse_response_for_vars(comment):
     """takes block comment from GPT, yields tuple of str old name & new name for each var"""
     for line in comment.split('\n'):
@@ -286,6 +287,7 @@ def rename_data(old_name, new_name):
     """takes an old and new data name, finds the data and renames it
         old_name: str, old variable name of the form DAT_{addr}
         new_name: str, new variable name"""
+    new_name = new_name.upper()
     address = int(old_name.strip('DAT_'), 16)
     sym = FLATAPI.getSymbolAt(FLATAPI.toAddr(address))
     sym.setName(new_name, SourceType.USER_DEFINED)
@@ -298,11 +300,11 @@ def rename_high_variable(hv, new_name, data_type=None):
 
     if data_type is None:
         data_type = hv.getDataType()
-    return HighFunctionDBUtil.updateDBVariable(hv, 
-                unicode(new_name), 
-                data_type, 
+    return HighFunctionDBUtil.updateDBVariable(hv,
+                unicode(new_name),
+                data_type,
                 SourceType.ANALYSIS)
-    
+
 
 def sanitize_variable_name(name):
     """takes a variable name and returns a sanitized version that can be used as a variable name in Ghidra
@@ -337,10 +339,17 @@ def apply_variable_predictions(comment):
     for old, new in parse_response_for_vars(comment):
         new = sanitize_variable_name(new)
         if re.match(r"^DAT_[0-9a-f]+$", old): # Globals with default names
-            rename_data(old, new)
-        else:
-            if old in symbols and symbols[old] is not None:
+            try:
+                rename_data(old, new)
+            except Exception as e:
+                logging.error('Failed to rename data: {}'.format(e))
+        elif old in symbols and symbols[old] is not None:
+            try:
                 rename_high_variable(symbols[old], new)
+            except Exception as e:
+                logging.error('Failed to rename variable: {}'.format(e))
+        else:
+            logging.debug("GP3O wanted to rename variable {} to {}, but shan't".format(old, new))
 
     new_func_name = sanitize_variable_name(parse_response_for_name(comment))
     if new_func_name:
