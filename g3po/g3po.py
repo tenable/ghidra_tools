@@ -38,7 +38,9 @@ EXTRA = ""            # Extra text appended to the prompt.
 #EXTRA = "but write everything in the form of a sonnet" # for example
 LOGLEVEL = INFO       # Adjust for more or less line noise in the console.
 COMMENTWIDTH = 80     # How wide the comment, inside the little speech balloon, should be.
-APPLYRESULTS = True   # Rename function and variables per G3PO's predictions
+RENAME_FUNCTION = True   # Rename function per G3PO's suggestions
+RENAME_VARIABLES = True  # Rename variables per G3PO's suggestions
+OVERRIDE_COMMENTS = True # Override existing comments
 C3POASCII = r"""
           /~\
          |oo )
@@ -207,13 +209,14 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
     if function is None:
         logging.error("Failed to get current function")
         return None
-    old_comment = function.getComment()
-    if old_comment is not None:
-        if SOURCE in old_comment:
-            function.setComment(None)
-        else:
-            logging.info("Function already has a comment")
-            return None
+    if not OVERRIDE_COMMENTS:
+        old_comment = function.getComment()
+        if old_comment is not None:
+            if SOURCE in old_comment:
+                function.setComment(None)
+            else:
+                logging.info("Function already has a comment")
+                return None
     c_code = decompile_current_function(function)
     if c_code is None:
         logging.error("Failed to decompile current function")
