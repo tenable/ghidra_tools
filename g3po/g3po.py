@@ -38,7 +38,7 @@ EXTRA = ""            # Extra text appended to the prompt.
 #EXTRA = "but write everything in the form of a sonnet" # for example
 LOGLEVEL = INFO       # Adjust for more or less line noise in the console.
 COMMENTWIDTH = 80     # How wide the comment, inside the little speech balloon, should be.
-RENAME_FUNCTION = True   # Rename function per G3PO's suggestions
+RENAME_FUNCTION = False # Rename function per G3PO's suggestions
 RENAME_VARIABLES = True  # Rename variables per G3PO's suggestions
 OVERRIDE_COMMENTS = True # Override existing comments
 C3POASCII = r"""
@@ -56,6 +56,7 @@ C3POASCII = r"""
          | | |
         /_]_[_\
 """
+TRY_TO_SUMMARIZE_LONG_FUNCTIONS = False # very experimental, use at your own risk
 ##########################################################################################
 
 
@@ -178,13 +179,9 @@ def decompile_current_function(function=None):
     return decomp_src
 
 
-def generate_comment(c_code, temperature=0.19, program_info=None, prompt=None, model=MODEL, max_tokens=MAXTOKENS):
-    intro = "Below is some C code that Ghidra decompiled from a binary that I'm trying to reverse engineer."
-    #program_info = get_program_info()
-    #if program_info:
-    #    intro = intro.replace("a binary", f'a {program_info["language_id"]} binary')
-    if prompt is None:
-        prompt = """{intro}
+def build_prompt_for_function(c_code, function_name):
+    intro = "Below is some C code that Ghidra decompiled from a function called {function_name} that I'm trying to reverse engineer.".format(function_name=function_name)
+    prompt = """{intro}
 
 ```
 {c_code}
@@ -193,6 +190,35 @@ def generate_comment(c_code, temperature=0.19, program_info=None, prompt=None, m
 Please explain what this code does, in {style}, and carefully explain your reasoning in a way that might be useful to a reverse engineer. Finally, suggest a suitable name for this function and suggest informative names for any variables whose purpose is clear. Print each suggested variable name on its own line in the form $old -> $new, where $old is the old name and $new is the  new name. Print the suggested function name on its own line in the form $old :: $new. {extra}
 
 """.format(intro=intro, c_code=c_code, style=LANGUAGE, extra=EXTRA)
+    return prompt
+
+
+def build_prompt_for_chunk(c_code, function_name):
+    intro = "Below is some C code that Ghidra decompiled from a function called {function_name} that I'm trying to reverse engineer.".format(function_name=function_name)
+    prompt = """{intro}
+
+```
+{c_code}
+```
+
+Please explain what this code does, in {style}, and carefully explain your reasoning in a way that might be useful to a reverse engineer. {extra}
+Finally, suggest informative names for any variables whose purpose is clear. Print each suggested variable name on its own line in the form $old -> $new, where $old is the old name and $new is the  new name.
+"""
+    return prompt
+
+
+
+
+def estimate_number_of_tokens(c_code):
+    return int(len(c_code) / 2.5)
+
+
+def generate_comment(c_code, function_name, temperature=0.19, program_info=None, prompt=None, model=MODEL, max_tokens=MAXTOKENS):
+    #program_info = get_program_info()
+    #if program_info:
+    #    intro = intro.replace("a binary", f'a {program_info["language_id"]} binary')
+    if prompt is None:
+        prompt = build_prompt_for_function(c_code, function_name)
     print("Prompt:\n\n{prompt}".format(prompt=prompt))
     response = openai_request(prompt=prompt, temperature=temperature, max_tokens=max_tokens, model=MODEL)
     try:
@@ -204,28 +230,89 @@ Please explain what this code does, in {style}, and carefully explain your reaso
         return None
 
 
+def build_summarizing_prompt(comments, function_name):
+    prompt = """In the code block below are a series of comments on disjoint chunks of code in a function called {function_name} that I am trying to reverse engineer.
+
+```
+    {concatenated_comments}
+```
+
+ Please summarize the comments and speculate on what the function does, considered as a whole. Finally, suggest a name for the function and print this name on a new line after the text, '{function_name} ::'.
+""".format(function_name=function_name, concatenated_comments="\n\n".join(comments))
+    return prompt
+
+
+def summarize_comments(comments, function_name, temperature=0.19, model=MODEL, max_tokens=MAXTOKENS):
+    prompt = build_summarizing_prompt(comments, function_name)
+    logging.info("Prompt:\n\n{prompt}".format(prompt=prompt))
+    response = openai_request(prompt=prompt, temperature=temperature, max_tokens=max_tokens, model=MODEL)
+    try:
+        res = response['choices'][0]['text'].strip()
+        logging.info(res)
+        return res
+    except Exception as e:
+        logging.error("Failed to get response: {e}".format(e=e))
+        return None
+
+
+def generate_comment_for_long_function(c_code, function_name, temperature=0.19, program_info=None, prompt=None, model=MODEL, max_tokens=MAXTOKENS):
+    lines = c_code.split("\n")
+    chunks = []
+    cur_chunk = ""
+    estimated_tokens = 0
+    while lines:
+        while lines and estimated_tokens < 4000:
+            cur_chunk += lines.pop(0) + "\n"
+            estimated_tokens = estimate_number_of_tokens(cur_chunk)
+        chunks.append(cur_chunk)
+        cur_chunk = ""
+        estimated_tokens = 0
+    print("Carved {num_chunks} chunks".format(num_chunks=len(chunks)))
+    comments = []
+    n = 0
+    for chunk in chunks:
+        prompt = build_prompt_for_chunk(chunk, function_name)
+        response = openai_request(prompt=prompt, temperature=0.03, max_tokens=4000//len(chunks), model=MODEL)
+        try:
+            n += 1
+            res = response['choices'][0]['text'].strip()
+            c = "Comment on part {n} of {total}: {res}".format(n=n, total=len(chunks), res=res)
+            logging.info(c)
+            comments.append(c)
+        except Exception as e:
+            logging.error("Failed to get response for chunk: {e}".format(e=e))
+            logging.error("Chunk: {chunk}".format(chunk=chunk))
+    summary = summarize_comments(comments, function_name, temperature=temperature, model=MODEL, max_tokens=MAXTOKENS)
+    comment = "SUMMARY\n=======\n\n" + summary + "\n\nPEEPHOLE COMMENTS\n-----------------\n\n" + ("\n\n".join(comments)) 
+    return comment
+    
+            
+
 def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS):
     function = get_current_function()
+    function_name = function.getName()
     if function is None:
         logging.error("Failed to get current function")
         return None
-    if not OVERRIDE_COMMENTS:
-        old_comment = function.getComment()
-        if old_comment is not None:
-            if SOURCE in old_comment:
-                function.setComment(None)
-            else:
-                logging.info("Function already has a comment")
-                return None
+    old_comment = function.getComment()
+    if old_comment is not None:
+        if OVERRIDE_COMMENTS or SOURCE in old_comment:
+            function.setComment(None)
+        else:
+            logging.info("Function {function_name} already has a comment".format(function_name=function_name))
+            return None
     c_code = decompile_current_function(function)
     if c_code is None:
-        logging.error("Failed to decompile current function")
+        logging.error("Failed to decompile current function {function_name}".format(function_name=function_name))
         return
-    approximate_tokens = len(c_code) // 2
+    approximate_tokens = estimate_number_of_tokens(c_code)
     logging.info("Length of decompiled C code: {c_code_len} characters, guessing {approximate_tokens} tokens".format(c_code_len=len(c_code), approximate_tokens=approximate_tokens))
-    if approximate_tokens < max_tokens and approximate_tokens + max_tokens > 3000:
-        max_tokens = 4096 - approximate_tokens
-    comment = generate_comment(c_code, temperature=temperature, model=model, max_tokens=max_tokens)
+    if TRY_TO_SUMMARIZE_LONG_FUNCTIONS and approximate_tokens > 4000:
+        comment = generate_comment_for_long_function(c_code, function_name=function_name, temperature=temperature, model=model, max_tokens=max_tokens)
+        ## This is really quite broken. Best just to bail out.
+        #logging.error("Function too long to comment")
+    else:
+        comment = generate_comment(c_code, function_name=function_name, temperature=temperature, model=model, max_tokens=max_tokens)
     if comment is None:
         logging.error("Failed to generate comment")
         return
@@ -312,6 +399,8 @@ def rename_high_variable(hv, new_name, data_type=None):
 def sanitize_variable_name(name):
     """takes a variable name and returns a sanitized version that can be used as a variable name in Ghidra
     name: str, variable name"""
+    if not name:
+        return name
     # strip out any characters that aren't letters, numbers, or underscores
     name = re.sub(r'[^a-zA-Z0-9_]', '', name)
     # if the first character is a number, prepend an underscore
@@ -323,45 +412,52 @@ def apply_variable_predictions(comment):
     logging.info('Applying gpt-3 variable names')
 
     func = get_current_function()
-    raw_vars = func.getAllVariables().tolist()
-    variables = {var.getName(): var for var in raw_vars}
 
-    # John coming in clutch again
-    # https://github.com/NationalSecurityAgency/ghidra/issues/2143#issuecomment-665300865
-    options = DecompileOptions()
-    monitor = ConsoleTaskMonitor()
-    ifc = DecompInterface()
-    ifc.setOptions(options)
-    ifc.openProgram(func.getProgram())
-    res = ifc.decompileFunction(func, TIMEOUT, monitor)
-    high_func = res.getHighFunction()
-    lsm = high_func.getLocalSymbolMap()
-    symbols = lsm.getSymbols()
-    symbols = {var.getName(): var for var in symbols}
+    if RENAME_VARIABLES:
+        raw_vars = func.getAllVariables().tolist()
+        variables = {var.getName(): var for var in raw_vars}
 
-    for old, new in parse_response_for_vars(comment):
-        new = sanitize_variable_name(new)
-        if re.match(r"^DAT_[0-9a-f]+$", old): # Globals with default names
-            try:
-                rename_data(old, new)
-            except Exception as e:
-                logging.error('Failed to rename data: {}'.format(e))
-        elif old in symbols and symbols[old] is not None:
-            try:
-                rename_high_variable(symbols[old], new)
-            except Exception as e:
-                logging.error('Failed to rename variable: {}'.format(e))
-        else:
-            logging.debug("GP3O wanted to rename variable {} to {}, but shan't".format(old, new))
+        # John coming in clutch again
+        # https://github.com/NationalSecurityAgency/ghidra/issues/2143#issuecomment-665300865
+        options = DecompileOptions()
+        monitor = ConsoleTaskMonitor()
+        ifc = DecompInterface()
+        ifc.setOptions(options)
+        ifc.openProgram(func.getProgram())
+        res = ifc.decompileFunction(func, TIMEOUT, monitor)
+        high_func = res.getHighFunction()
+        lsm = high_func.getLocalSymbolMap()
+        symbols = lsm.getSymbols()
+        symbols = {var.getName(): var for var in symbols}
 
-    new_func_name = sanitize_variable_name(parse_response_for_name(comment))
-    if new_func_name:
-        func.setName(new_func_name, SourceType.USER_DEFINED)
-        logging.debug('G3P0 renamed function to {}'.format(new_func_name))
+        for old, new in parse_response_for_vars(comment):
+            old = sanitize_variable_name(old)
+            new = sanitize_variable_name(new)
+            if not new:
+                logging.error('Could not parse new name for {}'.format(old))
+                continue
+            if re.match(r"^DAT_[0-9a-f]+$", old): # Globals with default names
+                try:
+                    rename_data(old, new)
+                except Exception as e:
+                    logging.error('Failed to rename data: {}'.format(e))
+            elif old in symbols and symbols[old] is not None:
+                try:
+                    rename_high_variable(symbols[old], new)
+                except Exception as e:
+                    logging.error('Failed to rename variable: {}'.format(e))
+            else:
+                logging.debug("GP3O wanted to rename variable {} to {}, but shan't".format(old, new))
+
+    if func.getName().startswith('FUN_') or RENAME_FUNCTION:
+        new_func_name = sanitize_variable_name(parse_response_for_name(comment))
+        if new_func_name:
+            func.setName(new_func_name, SourceType.USER_DEFINED)
+            logging.debug('G3P0 renamed function to {}'.format(new_func_name))
 
 
 
 comment = add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
 
-if comment is not None and APPLYRESULTS:
+if comment is not None and (RENAME_FUNCTION or RENAME_VARIABLES):
     apply_variable_predictions(comment)
