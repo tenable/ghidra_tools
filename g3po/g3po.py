@@ -1,9 +1,9 @@
 # Query OpenAI for a comment
-#@author Olivia Lucca Fraser
-#@category Machine Learning
-#@keybinding Ctrl-G
-#@menupath File.Analysis.G-3PO Analyse function with GPT-3
-#@toolbar g3po.png
+# @author Olivia Lucca Fraser
+# @category Machine Learning
+# @keybinding Ctrl-G
+# @menupath File.Analysis.G-3PO Analyse function with GPT-3
+# @toolbar g3po.png
 
 import httplib
 import textwrap
@@ -26,21 +26,23 @@ from ghidra.program.flatapi import FlatProgramAPI
 ##########################################################################################
 # Script Configuration
 ##########################################################################################
-#MODEL = "text-curie-001" # Choose which large language model we query
-MODEL = "text-davinci-003" # Choose which large language model we query
-TEMPERATURE = 0.19    # Set higher for more adventurous comments, lower for more conservative
+# MODEL = "text-curie-001" # Choose which large language model we query
+MODEL = "text-davinci-003"  # Choose which large language model we query
+# Set higher for more adventurous comments, lower for more conservative
+TEMPERATURE = 0.19
 TIMEOUT = 600         # How many seconds should we wait for a response from OpenAI?
 MAXTOKENS = 512       # The maximum number of tokens to request from OpenAI
 G3POSAY = True        # True if you want the cute C-3PO ASCII art, False otherwise
-#LANGUAGE = "the form of a sonnet"  # This can also be used as a style parameter for the comment
+# LANGUAGE = "the form of a sonnet"  # This can also be used as a style parameter for the comment
 LANGUAGE = "English"  # This can also be used as a style parameter for the comment
 EXTRA = ""            # Extra text appended to the prompt.
-#EXTRA = "but write everything in the form of a sonnet" # for example
+# EXTRA = "but write everything in the form of a sonnet" # for example
 LOGLEVEL = INFO       # Adjust for more or less line noise in the console.
-COMMENTWIDTH = 80     # How wide the comment, inside the little speech balloon, should be.
-RENAME_FUNCTION = False # Rename function per G3PO's suggestions
+# How wide the comment, inside the little speech balloon, should be.
+COMMENTWIDTH = 80
+RENAME_FUNCTION = False  # Rename function per G3PO's suggestions
 RENAME_VARIABLES = True  # Rename variables per G3PO's suggestions
-OVERRIDE_COMMENTS = True # Override existing comments
+OVERRIDE_COMMENTS = True  # Override existing comments
 G3POASCII = r"""
           /~\
          |oo )
@@ -56,13 +58,14 @@ G3POASCII = r"""
          | | |
         /_]_[_\
 """
-TRY_TO_SUMMARIZE_LONG_FUNCTIONS = False # very experimental, use at your own risk
+TRY_TO_SUMMARIZE_LONG_FUNCTIONS = False  # very experimental, use at your own risk
 SEND_ASSEMBLY = False
 ##########################################################################################
 
 SOURCE = "OpenAI GPT-3"
 TAG = SOURCE + " generated comment, take with a grain of salt:"
-FOOTER = "Model: {model}, Temperature: {temperature}".format(model=MODEL, temperature=TEMPERATURE)
+FOOTER = "Model: {model}, Temperature: {temperature}".format(
+    model=MODEL, temperature=TEMPERATURE)
 
 logging.getLogger().setLevel(LOGLEVEL)
 
@@ -81,8 +84,10 @@ def get_api_key():
                 line = f.read().strip()
                 return line.split("=")[1].strip('"\'')
         except Exception as e:
-            logging.error("Could not find OpenAI API key. Please set the OPENAI_API_KEY environment variable. Errors: {ke}, {e}".format(ke=ke, e=e))
+            logging.error(
+                "Could not find OpenAI API key. Please set the OPENAI_API_KEY environment variable. Errors: {ke}, {e}".format(ke=ke, e=e))
             raise e
+
 
 def flatten_list(l):
     return [item for sublist in l for item in sublist]
@@ -92,10 +97,10 @@ def wordwrap(s, width=COMMENTWIDTH, pad=True):
     """Wrap a string to a given number of characters, but don't break words."""
     # first replace single line breaks with double line breaks
     lines = [textwrap.TextWrapper(width=width,
-                                 break_long_words=False,
-                                 break_on_hyphens=True,
-                                 replace_whitespace=False).wrap("    " + L)
-            for L in s.splitlines()]
+                                  break_long_words=False,
+                                  break_on_hyphens=True,
+                                  replace_whitespace=False).wrap("    " + L)
+             for L in s.splitlines()]
     # now flatten the lines list
     lines = flatten_list(lines)
     if pad:
@@ -105,7 +110,8 @@ def wordwrap(s, width=COMMENTWIDTH, pad=True):
 
 def boxedtext(text, width=COMMENTWIDTH, tag=TAG):
     wrapped = wordwrap(text, width, pad=True)
-    wrapped = "\n".join([tag.ljust(width), " ".ljust(width), wrapped, " ".ljust(width), FOOTER.ljust(width)])
+    wrapped = "\n".join([tag.ljust(width), " ".ljust(
+        width), wrapped, " ".ljust(width), FOOTER.ljust(width)])
     side_bordered = "|" + wrapped.replace("\n", "|\n|") + "|"
     top_border = "/" + "-" * (len(side_bordered.split("\n")[0]) - 2) + "\\"
     bottom_border = top_border[::-1]
@@ -144,10 +150,10 @@ def send_https_request(address, path, data, headers):
 
 def openai_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
     data = {
-      "model": MODEL,
-      "prompt": prompt,
-      "max_tokens": max_tokens,
-      "temperature": temperature
+        "model": MODEL,
+        "prompt": prompt,
+        "max_tokens": max_tokens,
+        "temperature": temperature
     }
     # The URL is "https://api.openai.com/v1/completions"
     host = "api.openai.com"
@@ -174,15 +180,19 @@ def get_current_function():
 def decompile_current_function(function=None):
     if function is None:
         function = get_current_function()
-    logging.info("Current address is at {currentAddress}".format(currentAddress=currentAddress.__str__()))
-    logging.info("Decompiling function: {function_name} at {function_entrypoint}".format(function_name=function.getName(), function_entrypoint=function.getEntryPoint().__str__()))
+    logging.info("Current address is at {currentAddress}".format(
+        currentAddress=currentAddress.__str__()))
+    logging.info("Decompiling function: {function_name} at {function_entrypoint}".format(
+        function_name=function.getName(), function_entrypoint=function.getEntryPoint().__str__()))
     decomp = ghidra.app.decompiler.DecompInterface()
     decomp.openProgram(currentProgram)
     decomp_res = decomp.decompileFunction(function, TIMEOUT, monitor)
     if decomp_res.isTimedOut():
-        logging.warning("Timed out while attempting to decompile '{function_name}'".format(function_name=function.getName()))
+        logging.warning("Timed out while attempting to decompile '{function_name}'".format(
+            function_name=function.getName()))
     elif not decomp_res.decompileCompleted():
-        logging.error("Failed to decompile {function_name}".format(function_name=function.getName()))
+        logging.error("Failed to decompile {function_name}".format(
+            function_name=function.getName()))
         logging.error("    Error: " + decomp_res.getErrorMessage())
         return None
     decomp_src = decomp_res.getDecompiledFunction().getC()
@@ -209,9 +219,9 @@ def get_architecture():
     """Return the architecture, word size, and endianness of the current program."""
     arch = currentProgram.getLanguage().getProcessor().toString()
     word_size = currentProgram.getLanguage().getLanguageDescription().getSize()
-    endianness = currentProgram.getLanguage().getLanguageDescription().getEndian().toString()
+    endianness = currentProgram.getLanguage(
+    ).getLanguageDescription().getEndian().toString()
     return {'arch': arch, 'word_size': word_size, 'endianness': endianness}
-
 
 
 def lang_description():
@@ -221,13 +231,15 @@ def lang_description():
         arch = arch_details['arch']
         word_size = arch_details['word_size']
         endianness = arch_details['endianness']
-        lang = "{arch} {word_size}-bit {endianness}".format(arch=arch, word_size=word_size, endianness=endianness)
+        lang = "{arch} {word_size}-bit {endianness}".format(
+            arch=arch, word_size=word_size, endianness=endianness)
     return lang
 
 
 def build_prompt_for_function(code, function_name):
     lang = lang_description()
-    intro = "Below is some {lang} code that Ghidra decompiled from a function called {function_name} that I'm trying to reverse engineer.".format(function_name=function_name, lang=lang)
+    intro = "Below is some {lang} code that Ghidra decompiled from a function called {function_name} that I'm trying to reverse engineer.".format(
+        function_name=function_name, lang=lang)
     prompt = """{intro}
 
 ```
@@ -242,7 +254,8 @@ Please explain what this code does, in {style}, and carefully explain your reaso
 
 def build_prompt_for_chunk(code, function_name):
     lang = lang_description()
-    intro = "Below is some {lang} code that Ghidra decompiled from a function called {function_name} that I'm trying to reverse engineer.".format(function_name=function_name, lang=lang)
+    intro = "Below is some {lang} code that Ghidra decompiled from a function called {function_name} that I'm trying to reverse engineer.".format(
+        function_name=function_name, lang=lang)
     prompt = """{intro}
 
 ```
@@ -255,20 +268,19 @@ Finally, suggest informative names for any variables whose purpose is clear. Pri
     return prompt
 
 
-
-
 def estimate_number_of_tokens(code):
     return int(len(code) / 2.5)
 
 
 def generate_comment(code, function_name, temperature=0.19, program_info=None, prompt=None, model=MODEL, max_tokens=MAXTOKENS):
     #program_info = get_program_info()
-    #if program_info:
+    # if program_info:
     #    intro = intro.replace("a binary", f'a {program_info["language_id"]} binary')
     if prompt is None:
         prompt = build_prompt_for_function(code, function_name)
     print("Prompt:\n\n{prompt}".format(prompt=prompt))
-    response = openai_request(prompt=prompt, temperature=temperature, max_tokens=max_tokens, model=MODEL)
+    response = openai_request(
+        prompt=prompt, temperature=temperature, max_tokens=max_tokens, model=MODEL)
     try:
         res = response['choices'][0]['text'].strip()
         print(res)
@@ -293,7 +305,8 @@ def build_summarizing_prompt(comments, function_name):
 def summarize_comments(comments, function_name, temperature=0.19, model=MODEL, max_tokens=MAXTOKENS):
     prompt = build_summarizing_prompt(comments, function_name)
     logging.info("Prompt:\n\n{prompt}".format(prompt=prompt))
-    response = openai_request(prompt=prompt, temperature=temperature, max_tokens=max_tokens, model=MODEL)
+    response = openai_request(
+        prompt=prompt, temperature=temperature, max_tokens=max_tokens, model=MODEL)
     try:
         res = response['choices'][0]['text'].strip()
         logging.info(res)
@@ -320,21 +333,25 @@ def generate_comment_for_long_function(code, function_name, temperature=0.19, pr
     n = 0
     for chunk in chunks:
         prompt = build_prompt_for_chunk(chunk, function_name)
-        response = openai_request(prompt=prompt, temperature=0.03, max_tokens=4000//len(chunks), model=MODEL)
+        response = openai_request(
+            prompt=prompt, temperature=0.03, max_tokens=4000//len(chunks), model=MODEL)
         try:
             n += 1
             res = response['choices'][0]['text'].strip()
-            c = "Comment on part {n} of {total}: {res}".format(n=n, total=len(chunks), res=res)
+            c = "Comment on part {n} of {total}: {res}".format(
+                n=n, total=len(chunks), res=res)
             logging.info(c)
             comments.append(c)
         except Exception as e:
             logging.error("Failed to get response for chunk: {e}".format(e=e))
             logging.error("Chunk: {chunk}".format(chunk=chunk))
-    summary = summarize_comments(comments, function_name, temperature=temperature, model=MODEL, max_tokens=MAXTOKENS)
-    comment = "SUMMARY\n=======\n\n" + summary + "\n\nPEEPHOLE COMMENTS\n-----------------\n\n" + ("\n\n".join(comments)) 
+    summary = summarize_comments(
+        comments, function_name, temperature=temperature, model=MODEL, max_tokens=MAXTOKENS)
+    comment = "SUMMARY\n=======\n\n" + summary + \
+        "\n\nPEEPHOLE COMMENTS\n-----------------\n\n" + \
+        ("\n\n".join(comments))
     return comment
-    
-            
+
 
 def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS):
     function = get_current_function()
@@ -347,20 +364,25 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
         if OVERRIDE_COMMENTS or SOURCE in old_comment:
             function.setComment(None)
         else:
-            logging.info("Function {function_name} already has a comment".format(function_name=function_name))
+            logging.info("Function {function_name} already has a comment".format(
+                function_name=function_name))
             return None
     code = get_code(function)
     if code is None:
-        logging.error("Failed to {action} current function {function_name}".format(function_name=function_name, action="disassemble" if SEND_ASSEMBLY else "decompile"))
+        logging.error("Failed to {action} current function {function_name}".format(
+            function_name=function_name, action="disassemble" if SEND_ASSEMBLY else "decompile"))
         return
     approximate_tokens = estimate_number_of_tokens(code)
-    logging.info("Length of decompiled C code: {code_len} characters, guessing {approximate_tokens} tokens".format(code_len=len(code), approximate_tokens=approximate_tokens))
+    logging.info("Length of decompiled C code: {code_len} characters, guessing {approximate_tokens} tokens".format(
+        code_len=len(code), approximate_tokens=approximate_tokens))
     if TRY_TO_SUMMARIZE_LONG_FUNCTIONS and approximate_tokens > 4000:
-        comment = generate_comment_for_long_function(code, function_name=function_name, temperature=temperature, model=model, max_tokens=max_tokens)
-        ## This is really quite broken. Best just to bail out.
+        comment = generate_comment_for_long_function(
+            code, function_name=function_name, temperature=temperature, model=model, max_tokens=max_tokens)
+        # This is really quite broken. Best just to bail out.
         #logging.error("Function too long to comment")
     else:
-        comment = generate_comment(code, function_name=function_name, temperature=temperature, model=model, max_tokens=max_tokens)
+        comment = generate_comment(code, function_name=function_name,
+                                   temperature=temperature, model=model, max_tokens=max_tokens)
     if comment is None:
         logging.error("Failed to generate comment")
         return
@@ -375,9 +397,9 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
     except DuplicateNameException as e:
         logging.error("Failed to set comment: {e}".format(e=e))
         return
-    logging.info("Added comment to function: {function_name}".format(function_name=function.getName()))
+    logging.info("Added comment to function: {function_name}".format(
+        function_name=function.getName()))
     return comment
-
 
 
 def parse_response_for_vars(comment):
@@ -410,10 +432,13 @@ def rename_var(old_name, new_name, variables):
         var_to_rename = variables.get(old_name)
         if var_to_rename:
             var_to_rename.setName(new_name, SourceType.USER_DEFINED)
-            var_to_rename.setComment('GP3O renamed this from {} to {}'.format(old_name, new_name))
-            logging.debug('GP3O renamed variable {} to {}'.format(old_name, new_name))
+            var_to_rename.setComment(
+                'GP3O renamed this from {} to {}'.format(old_name, new_name))
+            logging.debug(
+                'GP3O renamed variable {} to {}'.format(old_name, new_name))
         else:
-            logging.debug('GP3O wanted to rename variable {} to {}, but no Variable found'.format(old_name, new_name))
+            logging.debug('GP3O wanted to rename variable {} to {}, but no Variable found'.format(
+                old_name, new_name))
 
     # only deals with listing vars, need to work with decomp to get the rest
     except KeyError:
@@ -439,9 +464,9 @@ def rename_high_variable(hv, new_name, data_type=None):
     if data_type is None:
         data_type = hv.getDataType()
     return HighFunctionDBUtil.updateDBVariable(hv,
-                unicode(new_name),
-                data_type,
-                SourceType.ANALYSIS)
+                                               unicode(new_name),
+                                               data_type,
+                                               SourceType.ANALYSIS)
 
 
 def sanitize_variable_name(name):
@@ -455,6 +480,7 @@ def sanitize_variable_name(name):
     if name[0].isdigit():
         name = 'x' + name
     return name
+
 
 def apply_variable_predictions(comment):
     logging.info('Applying gpt-3 variable names')
@@ -484,11 +510,12 @@ def apply_variable_predictions(comment):
             if not new:
                 logging.error('Could not parse new name for {}'.format(old))
                 continue
-            if re.match(r"^DAT_[0-9a-f]+$", old): # Globals with default names
-                #suffix = old.split('_')[-1] # on second thought, we don't want stale address info
+            if re.match(r"^DAT_[0-9a-f]+$", old):  # Globals with default names
+                # suffix = old.split('_')[-1] # on second thought, we don't want stale address info
                 # in a non-dynamic variable name
                 try:
-                    rename_data(old, new) # handy to retain the address info here
+                    # handy to retain the address info here
+                    rename_data(old, new)
                 except Exception as e:
                     logging.error('Failed to rename data: {}'.format(e))
             elif old in symbols and symbols[old] is not None:
@@ -497,17 +524,19 @@ def apply_variable_predictions(comment):
                 except Exception as e:
                     logging.error('Failed to rename variable: {}'.format(e))
             else:
-                logging.debug("GP3O wanted to rename variable {} to {}, but shan't".format(old, new))
+                logging.debug(
+                    "GP3O wanted to rename variable {} to {}, but shan't".format(old, new))
 
     if func.getName().startswith('FUN_') or RENAME_FUNCTION:
-        new_func_name = sanitize_variable_name(parse_response_for_name(comment))
+        new_func_name = sanitize_variable_name(
+            parse_response_for_name(comment))
         if new_func_name:
             func.setName(new_func_name, SourceType.USER_DEFINED)
             logging.debug('G3P0 renamed function to {}'.format(new_func_name))
 
 
-
-comment = add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
+comment = add_explanatory_comment_to_current_function(
+    temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
 
 if comment is not None and (RENAME_FUNCTION or RENAME_VARIABLES):
     apply_variable_predictions(comment)
