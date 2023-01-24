@@ -57,6 +57,7 @@ C3POASCII = r"""
         /_]_[_\
 """
 TRY_TO_SUMMARIZE_LONG_FUNCTIONS = False # very experimental, use at your own risk
+SEND_ASSEMBLY = False
 ##########################################################################################
 
 
@@ -73,6 +74,19 @@ STATE = getState()
 PROGRAM = state.getCurrentProgram()
 FLATAPI = FlatProgramAPI(PROGRAM)
 
+
+def get_api_key():
+    try:
+        return os.environ["OPENAI_API_KEY"]
+    except KeyError as ke:
+        try:
+            home = os.environ["HOME"]
+            with open(os.path.join(home, ".openai_api_key")) as f:
+                line = f.read().strip()
+                return line.split("=")[1].strip('"\'')
+        except Exception as e:
+            logging.error("Could not find OpenAI API key. Please set the OPENAI_API_KEY environment variable. Errors: {ke}, {e}".format(ke=ke, e=e))
+            raise e
 
 def flatten_list(l):
     return [item for sublist in l for item in sublist]
@@ -144,7 +158,7 @@ def openai_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
     path = "/v1/completions"
     headers = {
         "Content-Type": "application/json",
-        "Authorization": "Bearer {openai_api_key}".format(openai_api_key=os.getenv("OPENAI_API_KEY")),
+        "Authorization": "Bearer {openai_api_key}".format(openai_api_key=get_api_key())
     }
     data = send_https_request(host, path, data, headers)
     if data is None:
@@ -179,26 +193,64 @@ def decompile_current_function(function=None):
     return decomp_src
 
 
-def build_prompt_for_function(c_code, function_name):
-    intro = "Below is some C code that Ghidra decompiled from a function called {function_name} that I'm trying to reverse engineer.".format(function_name=function_name)
+def get_assembly(function=None):
+    if function is None:
+        function = get_current_function()
+    listing = currentProgram.getListing()
+    code_units = listing.getCodeUnits(function.getBody(), True)
+    assembly = "\n".join([code_unit.toString() for code_unit in code_units])
+    return assembly
+
+
+def get_code(function=None):
+    if SEND_ASSEMBLY:
+        return get_assembly(function=function)
+    else:
+        return decompile_current_function(function=function)
+
+
+def get_architecture():
+    """Return the architecture, word size, and endianness of the current program."""
+    arch = currentProgram.getLanguage().getProcessor().toString()
+    word_size = currentProgram.getLanguage().getLanguageDescription().getSize()
+    endianness = currentProgram.getLanguage().getLanguageDescription().getEndian().toString()
+    return {'arch': arch, 'word_size': word_size, 'endianness': endianness}
+
+
+
+def lang_description():
+    lang = "C"
+    if SEND_ASSEMBLY:
+        arch_details = get_architecture()
+        arch = arch_details['arch']
+        word_size = arch_details['word_size']
+        endianness = arch_details['endianness']
+        lang = "{arch} {word_size}-bit {endianness}".format(arch=arch, word_size=word_size, endianness=endianness)
+    return lang
+
+
+def build_prompt_for_function(code, function_name):
+    lang = lang_description()
+    intro = "Below is some {lang} code that Ghidra decompiled from a function called {function_name} that I'm trying to reverse engineer.".format(function_name=function_name, lang=lang)
     prompt = """{intro}
 
 ```
-{c_code}
+{code}
 ```
 
 Please explain what this code does, in {style}, and carefully explain your reasoning in a way that might be useful to a reverse engineer. Finally, suggest a suitable name for this function and suggest informative names for any variables whose purpose is clear. Print each suggested variable name on its own line in the form $old -> $new, where $old is the old name and $new is the  new name. Print the suggested function name on its own line in the form $old :: $new. {extra}
 
-""".format(intro=intro, c_code=c_code, style=LANGUAGE, extra=EXTRA)
+""".format(intro=intro, code=code, style=LANGUAGE, extra=EXTRA)
     return prompt
 
 
-def build_prompt_for_chunk(c_code, function_name):
-    intro = "Below is some C code that Ghidra decompiled from a function called {function_name} that I'm trying to reverse engineer.".format(function_name=function_name)
+def build_prompt_for_chunk(code, function_name):
+    lang = lang_description()
+    intro = "Below is some {lang} code that Ghidra decompiled from a function called {function_name} that I'm trying to reverse engineer.".format(function_name=function_name, lang=lang)
     prompt = """{intro}
 
 ```
-{c_code}
+{code}
 ```
 
 Please explain what this code does, in {style}, and carefully explain your reasoning in a way that might be useful to a reverse engineer. {extra}
@@ -209,16 +261,16 @@ Finally, suggest informative names for any variables whose purpose is clear. Pri
 
 
 
-def estimate_number_of_tokens(c_code):
-    return int(len(c_code) / 2.5)
+def estimate_number_of_tokens(code):
+    return int(len(code) / 2.5)
 
 
-def generate_comment(c_code, function_name, temperature=0.19, program_info=None, prompt=None, model=MODEL, max_tokens=MAXTOKENS):
+def generate_comment(code, function_name, temperature=0.19, program_info=None, prompt=None, model=MODEL, max_tokens=MAXTOKENS):
     #program_info = get_program_info()
     #if program_info:
     #    intro = intro.replace("a binary", f'a {program_info["language_id"]} binary')
     if prompt is None:
-        prompt = build_prompt_for_function(c_code, function_name)
+        prompt = build_prompt_for_function(code, function_name)
     print("Prompt:\n\n{prompt}".format(prompt=prompt))
     response = openai_request(prompt=prompt, temperature=temperature, max_tokens=max_tokens, model=MODEL)
     try:
@@ -255,8 +307,8 @@ def summarize_comments(comments, function_name, temperature=0.19, model=MODEL, m
         return None
 
 
-def generate_comment_for_long_function(c_code, function_name, temperature=0.19, program_info=None, prompt=None, model=MODEL, max_tokens=MAXTOKENS):
-    lines = c_code.split("\n")
+def generate_comment_for_long_function(code, function_name, temperature=0.19, program_info=None, prompt=None, model=MODEL, max_tokens=MAXTOKENS):
+    lines = code.split("\n")
     chunks = []
     cur_chunk = ""
     estimated_tokens = 0
@@ -301,18 +353,18 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
         else:
             logging.info("Function {function_name} already has a comment".format(function_name=function_name))
             return None
-    c_code = decompile_current_function(function)
-    if c_code is None:
-        logging.error("Failed to decompile current function {function_name}".format(function_name=function_name))
+    code = get_code(function)
+    if code is None:
+        logging.error("Failed to {action} current function {function_name}".format(function_name=function_name, action="disassemble" if SEND_ASSEMBLY else "decompile"))
         return
-    approximate_tokens = estimate_number_of_tokens(c_code)
-    logging.info("Length of decompiled C code: {c_code_len} characters, guessing {approximate_tokens} tokens".format(c_code_len=len(c_code), approximate_tokens=approximate_tokens))
+    approximate_tokens = estimate_number_of_tokens(code)
+    logging.info("Length of decompiled C code: {code_len} characters, guessing {approximate_tokens} tokens".format(code_len=len(code), approximate_tokens=approximate_tokens))
     if TRY_TO_SUMMARIZE_LONG_FUNCTIONS and approximate_tokens > 4000:
-        comment = generate_comment_for_long_function(c_code, function_name=function_name, temperature=temperature, model=model, max_tokens=max_tokens)
+        comment = generate_comment_for_long_function(code, function_name=function_name, temperature=temperature, model=model, max_tokens=max_tokens)
         ## This is really quite broken. Best just to bail out.
         #logging.error("Function too long to comment")
     else:
-        comment = generate_comment(c_code, function_name=function_name, temperature=temperature, model=model, max_tokens=max_tokens)
+        comment = generate_comment(code, function_name=function_name, temperature=temperature, model=model, max_tokens=max_tokens)
     if comment is None:
         logging.error("Failed to generate comment")
         return
@@ -437,8 +489,9 @@ def apply_variable_predictions(comment):
                 logging.error('Could not parse new name for {}'.format(old))
                 continue
             if re.match(r"^DAT_[0-9a-f]+$", old): # Globals with default names
+                suffix = old.split('_')[-1]
                 try:
-                    rename_data(old, new)
+                    rename_data(old, new + '_' + suffix) # handy to retain the address info here
                 except Exception as e:
                     logging.error('Failed to rename data: {}'.format(e))
             elif old in symbols and symbols[old] is not None:
