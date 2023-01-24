@@ -1,9 +1,9 @@
 # Query OpenAI for a comment
-#@author Lucca Fraser
-#@category AI
-#@keybinding
-#@menupath
-#@toolbar
+#@author Olivia Lucca Fraser
+#@category Machine Learning
+#@keybinding Ctrl-G
+#@menupath File.Analysis.G-3PO Analyse function with GPT-3
+#@toolbar g3po.png
 
 import httplib
 import textwrap
@@ -31,7 +31,7 @@ MODEL = "text-davinci-003" # Choose which large language model we query
 TEMPERATURE = 0.19    # Set higher for more adventurous comments, lower for more conservative
 TIMEOUT = 600         # How many seconds should we wait for a response from OpenAI?
 MAXTOKENS = 512       # The maximum number of tokens to request from OpenAI
-C3POSAY = True        # True if you want the cute C-3PO ASCII art, False otherwise
+G3POSAY = True        # True if you want the cute C-3PO ASCII art, False otherwise
 #LANGUAGE = "the form of a sonnet"  # This can also be used as a style parameter for the comment
 LANGUAGE = "English"  # This can also be used as a style parameter for the comment
 EXTRA = ""            # Extra text appended to the prompt.
@@ -41,7 +41,7 @@ COMMENTWIDTH = 80     # How wide the comment, inside the little speech balloon, 
 RENAME_FUNCTION = False # Rename function per G3PO's suggestions
 RENAME_VARIABLES = True  # Rename variables per G3PO's suggestions
 OVERRIDE_COMMENTS = True # Override existing comments
-C3POASCII = r"""
+G3POASCII = r"""
           /~\
          |oo )
          _\=/_
@@ -60,10 +60,6 @@ TRY_TO_SUMMARIZE_LONG_FUNCTIONS = False # very experimental, use at your own ris
 SEND_ASSEMBLY = False
 ##########################################################################################
 
-
-SCRIPTDIR = os.path.dirname(os.path.realpath(__file__))
-ICONPATH = os.path.join(SCRIPTDIR, "c3po.png")
-# Now how do I set the icon? I'm not sure.
 SOURCE = "OpenAI GPT-3"
 TAG = SOURCE + " generated comment, take with a grain of salt:"
 FOOTER = "Model: {model}, Temperature: {temperature}".format(model=MODEL, temperature=TEMPERATURE)
@@ -116,7 +112,7 @@ def boxedtext(text, width=COMMENTWIDTH, tag=TAG):
     return top_border + "\n" + side_bordered + "\n" + bottom_border
 
 
-def c3posay(text, width=COMMENTWIDTH, character=C3POASCII, tag=TAG):
+def g3posay(text, width=COMMENTWIDTH, character=G3POASCII, tag=TAG):
     box = boxedtext(text, width, tag=tag)
     headwidth = len(character.split("\n")[1]) + 2
     return box + "\n" + " "*headwidth + "/" + character
@@ -368,8 +364,8 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
     if comment is None:
         logging.error("Failed to generate comment")
         return
-    if C3POSAY:
-        comment = c3posay(comment)
+    if G3POSAY:
+        comment = g3posay(comment)
     else:
         comment = TAG + "\n" + comment
     listing = currentProgram.getListing()
@@ -489,9 +485,10 @@ def apply_variable_predictions(comment):
                 logging.error('Could not parse new name for {}'.format(old))
                 continue
             if re.match(r"^DAT_[0-9a-f]+$", old): # Globals with default names
-                suffix = old.split('_')[-1]
+                #suffix = old.split('_')[-1] # on second thought, we don't want stale address info
+                # in a non-dynamic variable name
                 try:
-                    rename_data(old, new + '_' + suffix) # handy to retain the address info here
+                    rename_data(old, new) # handy to retain the address info here
                 except Exception as e:
                     logging.error('Failed to rename data: {}'.format(e))
             elif old in symbols and symbols[old] is not None:

@@ -12,7 +12,7 @@ G-3PO is ready for use. The only catch is that it does require an OpenAI API key
 To run the script:
 - get yourself an OpenAI API key
 - add the key as an environment variable by putting export `OPENAI_API_KEY=whateveryourkeyhappenstobe` in your `~/.profile` file, or any other file that will be sourced before you launch Ghidra
-- copy or symlink c3po.py to your Ghidra scripts directory
+- copy or symlink g3po.py to your Ghidra scripts directory
 - add that directory in the Script Manager window
 - visit the decompiler window for a function you’d like some assistance interpreting
 - and then either run the script from the Script Manager window by selecting it and hitting the ▶️ icon, or bind it to a hotkey and strike when needed
