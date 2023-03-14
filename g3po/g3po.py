@@ -27,11 +27,11 @@ from ghidra.program.flatapi import FlatProgramAPI
 # Script Configuration
 ##########################################################################################
 # MODEL = "text-curie-001" # Choose which large language model we query
-MODEL = "text-davinci-003"  # Choose which large language model we query
+MODEL = "gpt-3.5-turbo"  # Choose which large language model we query
 # Set higher for more adventurous comments, lower for more conservative
 TEMPERATURE = 0.19
 TIMEOUT = 600         # How many seconds should we wait for a response from OpenAI?
-MAXTOKENS = 512       # The maximum number of tokens to request from OpenAI
+MAXTOKENS = 1024       # The maximum number of tokens to request from OpenAI
 G3POSAY = True        # True if you want the cute C-3PO ASCII art, False otherwise
 # LANGUAGE = "the form of a sonnet"  # This can also be used as a style parameter for the comment
 LANGUAGE = "English"  # This can also be used as a style parameter for the comment
@@ -148,16 +148,22 @@ def send_https_request(address, path, data, headers):
         return None
 
 
+def is_chat_model(model):
+    return 'turbo' in model or 'gpt-4' in model
+
 def openai_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
+    chat = is_chat_model(model)
+    if not chat:
+        prompt = '\n'.join(m['content'] for m in prompt)
     data = {
         "model": MODEL,
-        "prompt": prompt,
+        "messages" if chat else "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": temperature
     }
     # The URL is "https://api.openai.com/v1/completions"
     host = "api.openai.com"
-    path = "/v1/completions"
+    path = "/v1/chat/completions" if chat else "/v1/completions"
     headers = {
         "Content-Type": "application/json",
         "Authorization": "Bearer {openai_api_key}".format(openai_api_key=get_api_key())
@@ -240,117 +246,39 @@ def build_prompt_for_function(code, function_name):
     lang = lang_description()
     intro = "Below is some {lang} code that Ghidra decompiled from a function called {function_name} that I'm trying to reverse engineer.".format(
         function_name=function_name, lang=lang)
-    prompt = """{intro}
-
-```
+    system_msg = {"role": "system", "content": intro}
+    prompt = """```
 {code}
 ```
 
 Please explain what this code does, in {style}, and carefully explain your reasoning in a way that might be useful to a reverse engineer. Finally, suggest a suitable name for this function and suggest informative names for any variables whose purpose is clear. Print each suggested variable name on its own line in the form $old -> $new, where $old is the old name and $new is the  new name. Print the suggested function name on its own line in the form $old :: $new. {extra}
-
 """.format(intro=intro, code=code, style=LANGUAGE, extra=EXTRA)
-    return prompt
-
-
-def build_prompt_for_chunk(code, function_name):
-    lang = lang_description()
-    intro = "Below is some {lang} code that Ghidra decompiled from a function called {function_name} that I'm trying to reverse engineer.".format(
-        function_name=function_name, lang=lang)
-    prompt = """{intro}
-
-```
-{code}
-```
-
-Please explain what this code does, in {style}, and carefully explain your reasoning in a way that might be useful to a reverse engineer. {extra}
-Finally, suggest informative names for any variables whose purpose is clear. Print each suggested variable name on its own line in the form $old -> $new, where $old is the old name and $new is the  new name.
-"""
-    return prompt
+    prompt_msg = {"role": "user", "content": prompt}
+    return [system_msg, prompt_msg]
 
 
 def estimate_number_of_tokens(code):
     return int(len(code) / 2.5)
 
 
-def generate_comment(code, function_name, temperature=0.19, program_info=None, prompt=None, model=MODEL, max_tokens=MAXTOKENS):
-    #program_info = get_program_info()
-    # if program_info:
-    #    intro = intro.replace("a binary", f'a {program_info["language_id"]} binary')
-    if prompt is None:
-        prompt = build_prompt_for_function(code, function_name)
+def generate_comment(code, function_name, temperature=0.19, program_info=None, model=MODEL, max_tokens=MAXTOKENS):
+    prompt = build_prompt_for_function(code, function_name)
     print("Prompt:\n\n{prompt}".format(prompt=prompt))
     response = openai_request(
-        prompt=prompt, temperature=temperature, max_tokens=max_tokens, model=MODEL)
+        prompt=prompt, 
+        temperature=temperature,
+        max_tokens=max_tokens,
+        model=MODEL)
     try:
-        res = response['choices'][0]['text'].strip()
+        if is_chat_model(model):
+            res = response['choices'][0]['message']['content'].strip()
+        else:
+            res = response['choices'][0]['text'].strip()
         print(res)
         return res
     except Exception as e:
         logging.error("Failed to get response: {e}".format(e=e))
         return None
-
-
-def build_summarizing_prompt(comments, function_name):
-    prompt = """In the code block below are a series of comments on disjoint chunks of code in a function called {function_name} that I am trying to reverse engineer.
-
-```
-    {concatenated_comments}
-```
-
- Please summarize the comments and speculate on what the function does, considered as a whole. Finally, suggest a name for the function and print this name on a new line after the text, '{function_name} ::'.
-""".format(function_name=function_name, concatenated_comments="\n\n".join(comments))
-    return prompt
-
-
-def summarize_comments(comments, function_name, temperature=0.19, model=MODEL, max_tokens=MAXTOKENS):
-    prompt = build_summarizing_prompt(comments, function_name)
-    logging.info("Prompt:\n\n{prompt}".format(prompt=prompt))
-    response = openai_request(
-        prompt=prompt, temperature=temperature, max_tokens=max_tokens, model=MODEL)
-    try:
-        res = response['choices'][0]['text'].strip()
-        logging.info(res)
-        return res
-    except Exception as e:
-        logging.error("Failed to get response: {e}".format(e=e))
-        return None
-
-
-def generate_comment_for_long_function(code, function_name, temperature=0.19, program_info=None, prompt=None, model=MODEL, max_tokens=MAXTOKENS):
-    lines = code.split("\n")
-    chunks = []
-    cur_chunk = ""
-    estimated_tokens = 0
-    while lines:
-        while lines and estimated_tokens < 4000:
-            cur_chunk += lines.pop(0) + "\n"
-            estimated_tokens = estimate_number_of_tokens(cur_chunk)
-        chunks.append(cur_chunk)
-        cur_chunk = ""
-        estimated_tokens = 0
-    print("Carved {num_chunks} chunks".format(num_chunks=len(chunks)))
-    comments = []
-    n = 0
-    for chunk in chunks:
-        prompt = build_prompt_for_chunk(chunk, function_name)
-        response = openai_request(
-            prompt=prompt, temperature=0.03, max_tokens=4000//len(chunks), model=MODEL)
-        try:
-            n += 1
-            res = response['choices'][0]['text'].strip()
-            c = "Comment on part {n} of {total}: {res}".format(
-                n=n, total=len(chunks), res=res)
-            logging.info(c)
-            comments.append(c)
-        except Exception as e:
-            logging.error("Failed to get response for chunk: {e}".format(e=e))
-            logging.error("Chunk: {chunk}".format(chunk=chunk))
-    summary = summarize_comments(
-        comments, function_name, temperature=temperature, model=MODEL, max_tokens=MAXTOKENS)
-    comment = "SUMMARY\n=======\n\n" + summary + \
-        "\n\nPEEPHOLE COMMENTS\n-----------------\n\n" + \
-        ("\n\n".join(comments))
-    return comment
 
 
 def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS):
@@ -375,14 +303,8 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
     approximate_tokens = estimate_number_of_tokens(code)
     logging.info("Length of decompiled C code: {code_len} characters, guessing {approximate_tokens} tokens".format(
         code_len=len(code), approximate_tokens=approximate_tokens))
-    if TRY_TO_SUMMARIZE_LONG_FUNCTIONS and approximate_tokens > 4000:
-        comment = generate_comment_for_long_function(
-            code, function_name=function_name, temperature=temperature, model=model, max_tokens=max_tokens)
-        # This is really quite broken. Best just to bail out.
-        #logging.error("Function too long to comment")
-    else:
-        comment = generate_comment(code, function_name=function_name,
-                                   temperature=temperature, model=model, max_tokens=max_tokens)
+    comment = generate_comment(code, function_name=function_name,
+                               temperature=temperature, model=model, max_tokens=max_tokens)
     if comment is None:
         logging.error("Failed to generate comment")
         return
