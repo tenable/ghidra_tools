@@ -3,25 +3,7 @@
 # @category Machine Learning
 # @keybinding Ctrl-G
 # @menupath File.Analysis.G-3PO Analyse function with GPT-3
-# @toolbar g3po.png
-
-import httplib
-import textwrap
-import logging
-from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL
-import json
-import os
-import re
-from ghidra.app.script import GhidraScript
-from ghidra.program.model.listing import Function, FunctionManager
-from ghidra.program.model.mem import MemoryAccessException
-from ghidra.util.exception import DuplicateNameException
-from ghidra.program.model.symbol import SourceType
-from ghidra.program.model.pcode import HighFunctionDBUtil
-from ghidra.app.decompiler import DecompileOptions
-from ghidra.app.decompiler import DecompInterface
-from ghidra.util.task import ConsoleTaskMonitor
-from ghidra.program.flatapi import FlatProgramAPI
+# @toolbar G3PO.png
 
 ##########################################################################################
 # Script Configuration
@@ -29,7 +11,7 @@ from ghidra.program.flatapi import FlatProgramAPI
 # MODEL = "text-curie-001" # Choose which large language model we query
 MODEL = "gpt-3.5-turbo"  # Choose which large language model we query
 # Set higher for more adventurous comments, lower for more conservative
-TEMPERATURE = 0.19
+TEMPERATURE = 0.05
 TIMEOUT = 600         # How many seconds should we wait for a response from OpenAI?
 MAXTOKENS = 1024       # The maximum number of tokens to request from OpenAI
 G3POSAY = True        # True if you want the cute C-3PO ASCII art, False otherwise
@@ -37,7 +19,6 @@ G3POSAY = True        # True if you want the cute C-3PO ASCII art, False otherwi
 LANGUAGE = "English"  # This can also be used as a style parameter for the comment
 EXTRA = ""            # Extra text appended to the prompt.
 # EXTRA = "but write everything in the form of a sonnet" # for example
-LOGLEVEL = INFO       # Adjust for more or less line noise in the console.
 # How wide the comment, inside the little speech balloon, should be.
 COMMENTWIDTH = 80
 RENAME_FUNCTION = False  # Rename function per G3PO's suggestions
@@ -61,6 +42,72 @@ G3POASCII = r"""
 TRY_TO_SUMMARIZE_LONG_FUNCTIONS = False  # very experimental, use at your own risk
 SEND_ASSEMBLY = False
 ##########################################################################################
+
+## 
+# Note: I've updated this script so that it runs in the Ghidrathon Python 3 environment.
+# It should remain backwards-compatible with the Jython 2.7 environment.
+##
+
+import textwrap
+import logging
+from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL
+import json
+import os
+import re
+import ghidra
+from ghidra.app.script import GhidraScript
+from ghidra.program.model.listing import Function, FunctionManager
+from ghidra.program.model.mem import MemoryAccessException
+from ghidra.util.exception import DuplicateNameException
+from ghidra.program.model.symbol import SourceType
+from ghidra.program.model.pcode import HighFunctionDBUtil
+from ghidra.app.decompiler import DecompileOptions
+from ghidra.app.decompiler import DecompInterface
+from ghidra.util.task import ConsoleTaskMonitor
+from ghidra.program.flatapi import FlatProgramAPI
+
+LOGLEVEL = INFO       # Adjust for more or less line noise in the console.
+
+# The way we handle the API calls will vary depending on whether we're running jython
+# or python3. Jython doesn't have the requests library, so we'll use httplib instead.
+try:
+    import httplib
+    def send_https_request(address, path, data, headers):
+        try:
+            conn = httplib.HTTPSConnection(address)
+            json_req_data = json.dumps(data)
+            conn.request("POST", path, json_req_data, headers)
+            response = conn.getresponse()
+            json_data = response.read()
+            conn.close()
+            try:
+                data = json.loads(json_data)
+                return data
+            except ValueError:
+                logging.error("Could not parse JSON response from OpenAI!")
+                logging.debug(json_data)
+                return None
+        except Exception as e:
+            logging.error("Error sending HTTPS request: {e}".format(e=e))
+            return None
+except ImportError:
+    import requests
+    def send_https_request(address, path, data, headers):
+        try:
+            response = requests.post(
+                "https://{address}{path}".format(address=address, path=path),
+                json=data,
+                headers=headers)
+            try:
+                data = response.json()
+                return data
+            except ValueError:
+                logging.error("Could not parse JSON response from OpenAI!")
+                logging.debug(response.text)
+                return None
+        except Exception as e:
+            logging.error("Error sending HTTPS request: {e}".format(e=e))
+            return None
 
 SOURCE = "OpenAI GPT-3"
 TAG = SOURCE + " generated comment, take with a grain of salt:"
@@ -128,24 +175,6 @@ def escape_unescaped_single_quotes(s):
     return re.sub(r"(?<!\\)'", r"\\'", s)
 
 
-def send_https_request(address, path, data, headers):
-    try:
-        conn = httplib.HTTPSConnection(address)
-        json_req_data = json.dumps(data)
-        conn.request("POST", path, json_req_data, headers)
-        response = conn.getresponse()
-        json_data = response.read()
-        conn.close()
-        try:
-            data = json.loads(json_data)
-            return data
-        except ValueError:
-            logging.error("Could not parse JSON response from OpenAI!")
-            logging.debug(json_data)
-            return None
-    except Exception as e:
-        logging.error("Error sending HTTPS request: {e}".format(e=e))
-        return None
 
 
 def is_chat_model(model):
@@ -178,6 +207,7 @@ def openai_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
 
 
 def get_current_function():
+    print("currentAddress: {currentAddress}".format(currentAddress=currentAddress))
     listing = currentProgram.getListing()
     function = listing.getFunctionContaining(currentAddress)
     return function
@@ -244,15 +274,19 @@ def lang_description():
 
 def build_prompt_for_function(code, function_name):
     lang = lang_description()
-    intro = "Below is some {lang} code that Ghidra decompiled from a function called {function_name} that I'm trying to reverse engineer.".format(
-        function_name=function_name, lang=lang)
+    intro = """You are a reverse engineering assistant named G-3PO. When you are presented with C code decompiled from a {lang} binary, you will provide a high-level explanation of what that code does, in {style}, and speculate as to its purpose. You will explain your reasoning. You will suggest informative variable names for any variable whose purpose is clear, and you will suggest an informative name for the function itself. You will print each suggested variable name on its own line using the format
+    
+$old -> $new
+
+Finally, you will suggest a name for the function by printing it on its own line using the format
+
+$old :: $new
+""".format(lang=lang, style=LANGUAGE)
     system_msg = {"role": "system", "content": intro}
-    prompt = """```
+    prompt = """Here is code from the function {function_name}:\n\n```
 {code}
 ```
-
-Please explain what this code does, in {style}, and carefully explain your reasoning in a way that might be useful to a reverse engineer. Finally, suggest a suitable name for this function and suggest informative names for any variables whose purpose is clear. Print each suggested variable name on its own line in the form $old -> $new, where $old is the old name and $new is the  new name. Print the suggested function name on its own line in the form $old :: $new. {extra}
-""".format(intro=intro, code=code, style=LANGUAGE, extra=EXTRA)
+""".format(function_name=function_name, code=code)
     prompt_msg = {"role": "user", "content": prompt}
     return [system_msg, prompt_msg]
 
@@ -385,8 +419,13 @@ def rename_high_variable(hv, new_name, data_type=None):
 
     if data_type is None:
         data_type = hv.getDataType()
+    # if running in Jython, we'll need to use unicode
+    try:
+        new_name = unicode(new_name)
+    except NameError:
+        pass
     return HighFunctionDBUtil.updateDBVariable(hv,
-                                               unicode(new_name),
+                                               new_name,
                                                data_type,
                                                SourceType.ANALYSIS)
 
@@ -410,7 +449,7 @@ def apply_variable_predictions(comment):
     func = get_current_function()
 
     if RENAME_VARIABLES:
-        raw_vars = func.getAllVariables().tolist()
+        raw_vars = [v for v in func.getAllVariables()]
         variables = {var.getName(): var for var in raw_vars}
 
         # John coming in clutch again
