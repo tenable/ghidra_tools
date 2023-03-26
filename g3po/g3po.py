@@ -2,13 +2,13 @@
 # @author Olivia Lucca Fraser
 # @category Machine Learning
 # @keybinding Ctrl-G
-# @menupath File.Analysis.G-3PO Analyse function with GPT-3
+# @menupath File.Analysis.G-3PO Analyse function with GPT
 # @toolbar G3PO.png
 
 ##########################################################################################
 # Script Configuration
 ##########################################################################################
-# MODEL = "text-curie-001" # Choose which large language model we query
+# MODEL = "gpt-4" # Choose which large language model we query
 MODEL = "gpt-3.5-turbo"  # Choose which large language model we query
 # Set higher for more adventurous comments, lower for more conservative
 TEMPERATURE = 0.05
@@ -109,7 +109,28 @@ except ImportError:
             logging.error("Error sending HTTPS request: {e}".format(e=e))
             return None
 
-SOURCE = "OpenAI GPT-3"
+try:
+    import tiktoken
+    ENCODING = tiktoken.encoding_for_model(MODEL)
+    
+    def estimate_number_of_tokens(s):
+        if type(s) == str:
+            return len(ENCODING.encode(s))
+        elif type(s) == list:
+            for item in s:
+                token_count += estimate_number_of_tokens(item)
+            return token_count
+        elif type(s) == dict:
+            for k,v in s.items():
+                token_count += estimate_number_of_tokens(v) + 2
+
+except ImportError:
+
+    def estimate_number_of_tokens(s):
+        return int(len(s)/2.3)
+
+
+SOURCE = "AI"
 TAG = SOURCE + " generated comment, take with a grain of salt:"
 FOOTER = "Model: {model}, Temperature: {temperature}".format(
     model=MODEL, temperature=TEMPERATURE)
@@ -175,10 +196,9 @@ def escape_unescaped_single_quotes(s):
     return re.sub(r"(?<!\\)'", r"\\'", s)
 
 
-
-
 def is_chat_model(model):
     return 'turbo' in model or 'gpt-4' in model
+
 
 def openai_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
     chat = is_chat_model(model)
@@ -274,13 +294,15 @@ def lang_description():
 
 def build_prompt_for_function(code, function_name):
     lang = lang_description()
-    intro = """You are a reverse engineering assistant named G-3PO. When you are presented with C code decompiled from a {lang} binary, you will provide a high-level explanation of what that code does, in {style}, and speculate as to its purpose. You will explain your reasoning. You will suggest informative variable names for any variable whose purpose is clear, and you will suggest an informative name for the function itself. You will print each suggested variable name on its own line using the format
+    intro = """I am a reverse engineering assistant named G-3PO. When I am presented with C code decompiled from a {lang} binary, I will provide a high-level explanation of what that code does, in {style}, and speculate as to its purpose. I will explain my reasoning. I will suggest informative variable names for any variable whose purpose is clear, and I will suggest an informative name for the function itself. I will print each suggested variable name on its own line using the format
     
 $old -> $new
 
-Finally, you will suggest a name for the function by printing it on its own line using the format
+I will then suggest a name for the function by printing it on its own line using the format
 
 $old :: $new
+
+If I observe any security vulnerabilities in the code, I will describe them in detail, and explain how they might be exploited.
 """.format(lang=lang, style=LANGUAGE)
     system_msg = {"role": "system", "content": intro}
     prompt = """Here is code from the function {function_name}:\n\n```
@@ -290,9 +312,6 @@ $old :: $new
     prompt_msg = {"role": "user", "content": prompt}
     return [system_msg, prompt_msg]
 
-
-def estimate_number_of_tokens(code):
-    return int(len(code) / 2.5)
 
 
 def generate_comment(code, function_name, temperature=0.19, program_info=None, model=MODEL, max_tokens=MAXTOKENS):
@@ -444,7 +463,7 @@ def sanitize_variable_name(name):
 
 
 def apply_variable_predictions(comment):
-    logging.info('Applying gpt-3 variable names')
+    logging.info('Applying GPT variable names')
 
     func = get_current_function()
 
