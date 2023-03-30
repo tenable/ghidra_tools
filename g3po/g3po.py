@@ -454,8 +454,10 @@ def sanitize_variable_name(name):
     name: str, variable name"""
     if not name:
         return name
-    # strip out any characters that aren't letters, numbers, or underscores
-    name = re.sub(r'[^a-zA-Z0-9_]', '', name)
+    # strip out any characters that aren't letters, numbers, spaces, or underscores
+    name = re.sub(r'[^a-zA-Z0-9_ ]', '', name)
+    # take the first "word", in case ChatGPT added extra text behind the new variable name
+    name = list(filter(lambda x: len(x) > 0, name.split(" ")))[0]
     # if the first character is a number, prepend an underscore
     if name[0].isdigit():
         name = 'x' + name
