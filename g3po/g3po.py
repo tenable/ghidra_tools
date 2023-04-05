@@ -83,8 +83,8 @@ try:
             try:
                 data = json.loads(json_data)
                 return data
-            except ValueError:
-                logging.error("Could not parse JSON response from OpenAI!")
+            except ValueError as e:
+                logging.error("Could not parse JSON response: {e}".format(e=e))
                 logging.debug(json_data)
                 return None
         except Exception as e:
@@ -101,8 +101,8 @@ except ImportError:
             try:
                 data = response.json()
                 return data
-            except ValueError:
-                logging.error("Could not parse JSON response from OpenAI!")
+            except ValueError as e:
+                logging.error("Could not parse JSON response: {e}".format(e=e))
                 logging.debug(response.text)
                 return None
         except Exception as e:
@@ -143,17 +143,19 @@ FLATAPI = FlatProgramAPI(PROGRAM)
 
 
 def get_api_key():
+    vendor = "ANTHROPIC" if MODEL.startswith("claude") else "OPENAI"
     try:
-        return os.environ["OPENAI_API_KEY"]
+        return os.environ[vendor + "_API_KEY"]
     except KeyError as ke:
         try:
             home = os.environ["HOME"]
-            with open(os.path.join(home, ".openai_api_key")) as f:
+            keyfile = ".{v}_api_key".format(v=vendor.lower())
+            with open(os.path.join(home, keyfile)) as f:
                 line = f.read().strip()
                 return line.split("=")[1].strip('"\'')
         except Exception as e:
             logging.error(
-                "Could not find OpenAI API key. Please set the OPENAI_API_KEY environment variable. Errors: {ke}, {e}".format(ke=ke, e=e))
+                "Could not find {v} API key. Please set the {v}_API_KEY environment variable. Errors: {ke}, {e}".format(ke=ke, e=e, v=vendor))
             raise e
 
 
@@ -200,6 +202,16 @@ def is_chat_model(model):
     return 'turbo' in model or 'gpt-4' in model
 
 
+def query(prompt, temperature=TEMPERATURE, max_tokens=MAXTOKENS, model=MODEL):
+    vendor = "anthropic" if MODEL.startswith("claude") else "openai"
+    if vendor == "anthropic":
+        return anthropic_request(prompt, temperature, max_tokens, model)
+    elif vendor == "openai":
+        return openai_request(prompt, temperature, max_tokens, model)
+    else:
+        raise ValueError("Unknown vendor: {v}".format(v=vendor))
+
+
 def openai_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
     chat = is_chat_model(model)
     if not chat:
@@ -217,13 +229,48 @@ def openai_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
         "Content-Type": "application/json",
         "Authorization": "Bearer {openai_api_key}".format(openai_api_key=get_api_key())
     }
-    data = send_https_request(host, path, data, headers)
-    if data is None:
+    res = send_https_request(host, path, data, headers)
+    if res is None:
         logging.error("OpenAI request failed!")
         return None
     logging.info("OpenAI request succeeded!")
-    logging.info("Response: {data}".format(data=data))
-    return data
+    logging.info("Response: {res}".format(res=res))
+    if is_chat_model(model):
+        response = res['choices'][0]['message']['content'].strip()
+    else:
+        response = res['choices'][0]['text'].strip()
+    return response
+
+
+def anthropic_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
+    ## Format the prompt
+    formatted_prompt = []
+    for message in prompt:
+        role = 'Assistant' if message['role'] == 'assistant' else 'Human'
+        formatted_prompt.append(
+                "\n\n{role}: {content}".format(role=role, content=message['content']))
+    formatted_prompt = ''.join(formatted_prompt)
+    ## Send the request
+    host = "api.anthropic.com"
+    path = "/v1/complete"
+    headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer {anthropic_api_key}".format(anthropic_api_key=get_api_key())
+    }
+    data = {
+        "model": model,
+        "prompt": formatted_prompt,
+        "max_tokens_to_sample": max_tokens,
+        "temperature": temperature,
+        "stop_sequences": ["\n\nHuman:"]
+        }
+    res = send_https_request(host, path, data, headers)
+    if res is None:
+        logging.error("Anthropic request failed!")
+        return None
+    logging.info("Anthropic request succeeded!")
+    logging.info("Response: {data}".format(data=res))
+    return res['completion'].strip()
 
 
 def get_current_function():
@@ -317,16 +364,13 @@ If I observe any security vulnerabilities in the code, I will describe them in d
 def generate_comment(code, function_name, temperature=0.19, program_info=None, model=MODEL, max_tokens=MAXTOKENS):
     prompt = build_prompt_for_function(code, function_name)
     print("Prompt:\n\n{prompt}".format(prompt=prompt))
-    response = openai_request(
+    response = query(
         prompt=prompt, 
         temperature=temperature,
         max_tokens=max_tokens,
         model=MODEL)
+    return response
     try:
-        if is_chat_model(model):
-            res = response['choices'][0]['message']['content'].strip()
-        else:
-            res = response['choices'][0]['text'].strip()
         print(res)
         return res
     except Exception as e:
