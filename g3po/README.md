@@ -10,8 +10,8 @@ For a detailed writeup on the tool, and its rationale, see [G-3PO: A Protocol Dr
 G-3PO is ready for use. The only catch is that it does require an OpenAI API key, and the text completion service is unfree (as in beer, and as insofar as the model’s a black box). It is, however, reasonably cheap, and even with heavy use I haven’t spent more than the price of a cup of coffee while developing, debugging, and toying around with this tool.
 
 To run the script:
-- get yourself an OpenAI API key
-- add the key as an environment variable by putting export `OPENAI_API_KEY=whateveryourkeyhappenstobe` in your `~/.profile` file, or any other file that will be sourced before you launch Ghidra
+- get yourself an OpenAI or Anthropic API key (G-3PO supports LLM backends from both companies)
+- add the key as an environment variable by putting export `OPENAI_API_KEY=whateveryourkeyhappenstobe` or `ANTHROPIC_API_KEY=youranthropickeyifyouhaveone` in your `~/.profile` file, or any other file that will be sourced before you launch Ghidra
 - copy or symlink g3po.py to your Ghidra scripts directory
 - add that directory in the Script Manager window
 - visit the decompiler window for a function you’d like some assistance interpreting
@@ -23,7 +23,7 @@ Ideally, I’d like to provide a way for the user to twiddle the various paramet
 ##########################################################################################
 # Script Configuration
 ##########################################################################################
-MODEL = "text-davinci-003" # Choose which large language model we query
+MODEL = "gpt-3.5-turbo" # Choose which large language model we query -- gpt-4 and claude-v1.2 also supported
 TEMPERATURE = 0.19   # Set higher for more adventurous comments, lower for more conservative
 TIMEOUT = 600        # How many seconds should we wait for a response from OpenAI?
 MAXTOKENS = 512      # The maximum number of tokens to request from OpenAI
@@ -32,7 +32,7 @@ LANGUAGE = "English" # This can also be used as a style parameter.
 EXTRA = ""           # Extra text appended to the prompt.
 LOGLEVEL = INFO      # Adjust for more or less line noise in the console.
 COMMENTWIDTH = 80    # How wide the comment, inside the little speech balloon, should be.
-C3POASCII = r"""
+G3POASCII = r"""
           /~\
          |oo )
          _\=/_
