@@ -8,8 +8,11 @@
 ##########################################################################################
 # Script Configuration
 ##########################################################################################
-# MODEL = "gpt-4" # Choose which large language model we query
+#MODEL = "claude-v1.2" # Choose which large language model we query
 MODEL = "gpt-3.5-turbo"  # Choose which large language model we query
+# If you have an OpenAI API key, gpt-3.5-turbo gives you the best bang for your buck.
+# Use gpt-4 for slightly higher quality results, at a higher cost.
+# If you have an Anthropic API key, try claude-v1.2, which also seems to work quite well.
 # Set higher for more adventurous comments, lower for more conservative
 TEMPERATURE = 0.05
 TIMEOUT = 600         # How many seconds should we wait for a response from OpenAI?
@@ -83,8 +86,8 @@ try:
             try:
                 data = json.loads(json_data)
                 return data
-            except ValueError:
-                logging.error("Could not parse JSON response from OpenAI!")
+            except ValueError as e:
+                logging.error("Could not parse JSON response: {e}".format(e=e))
                 logging.debug(json_data)
                 return None
         except Exception as e:
@@ -101,8 +104,8 @@ except ImportError:
             try:
                 data = response.json()
                 return data
-            except ValueError:
-                logging.error("Could not parse JSON response from OpenAI!")
+            except ValueError as e:
+                logging.error("Could not parse JSON response: {e}".format(e=e))
                 logging.debug(response.text)
                 return None
         except Exception as e:
@@ -143,17 +146,19 @@ FLATAPI = FlatProgramAPI(PROGRAM)
 
 
 def get_api_key():
+    vendor = "ANTHROPIC" if MODEL.startswith("claude") else "OPENAI"
     try:
-        return os.environ["OPENAI_API_KEY"]
+        return os.environ[vendor + "_API_KEY"]
     except KeyError as ke:
         try:
             home = os.environ["HOME"]
-            with open(os.path.join(home, ".openai_api_key")) as f:
+            keyfile = ".{v}_api_key".format(v=vendor.lower())
+            with open(os.path.join(home, keyfile)) as f:
                 line = f.read().strip()
                 return line.split("=")[1].strip('"\'')
         except Exception as e:
             logging.error(
-                "Could not find OpenAI API key. Please set the OPENAI_API_KEY environment variable. Errors: {ke}, {e}".format(ke=ke, e=e))
+                "Could not find {v} API key. Please set the {v}_API_KEY environment variable. Errors: {ke}, {e}".format(ke=ke, e=e, v=vendor))
             raise e
 
 
@@ -200,6 +205,16 @@ def is_chat_model(model):
     return 'turbo' in model or 'gpt-4' in model
 
 
+def query(prompt, temperature=TEMPERATURE, max_tokens=MAXTOKENS, model=MODEL):
+    vendor = "anthropic" if MODEL.startswith("claude") else "openai"
+    if vendor == "anthropic":
+        return anthropic_request(prompt, temperature, max_tokens, model)
+    elif vendor == "openai":
+        return openai_request(prompt, temperature, max_tokens, model)
+    else:
+        raise ValueError("Unknown vendor: {v}".format(v=vendor))
+
+
 def openai_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
     chat = is_chat_model(model)
     if not chat:
@@ -217,13 +232,49 @@ def openai_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
         "Content-Type": "application/json",
         "Authorization": "Bearer {openai_api_key}".format(openai_api_key=get_api_key())
     }
-    data = send_https_request(host, path, data, headers)
-    if data is None:
+    res = send_https_request(host, path, data, headers)
+    if res is None:
         logging.error("OpenAI request failed!")
         return None
     logging.info("OpenAI request succeeded!")
-    logging.info("Response: {data}".format(data=data))
-    return data
+    logging.info("Response: {res}".format(res=res))
+    if is_chat_model(model):
+        response = res['choices'][0]['message']['content'].strip()
+    else:
+        response = res['choices'][0]['text'].strip()
+    return response
+
+
+def anthropic_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
+    ## Format the prompt
+    formatted_prompt = []
+    for message in prompt:
+        role = 'Assistant' if message['role'] == 'assistant' else 'Human'
+        formatted_prompt.append(
+                "\n\n{role}: {content}".format(role=role, content=message['content']))
+    formatted_prompt = ''.join(formatted_prompt) + "\n\nAssistant: "
+    print(formatted_prompt)
+    ## Send the request
+    host = "api.anthropic.com"
+    path = "/v1/complete"
+    headers = {
+            "Content-Type": "application/json",
+            "x-api-key": get_api_key()
+    }
+    data = {
+        "model": model,
+        "prompt": formatted_prompt,
+        "max_tokens_to_sample": max_tokens,
+        "temperature": temperature,
+        "stop_sequences": ["\n\nHuman:"]
+        }
+    res = send_https_request(host, path, data, headers)
+    if res is None:
+        logging.error("Anthropic request failed!")
+        return None
+    logging.info("Anthropic request succeeded!")
+    logging.info("Response: {data}".format(data=res))
+    return res['completion'].strip()
 
 
 def get_current_function():
@@ -294,39 +345,37 @@ def lang_description():
 
 def build_prompt_for_function(code, function_name):
     lang = lang_description()
-    intro = """I am a reverse engineering assistant named G-3PO. When I am presented with C code decompiled from a {lang} binary, I will provide a high-level explanation of what that code does, in {style}, and speculate as to its purpose. I will explain my reasoning. I will suggest informative variable names for any variable whose purpose is clear, and I will suggest an informative name for the function itself. I will print each suggested variable name on its own line using the format
+    intro = """You are a reverse engineering assistant named G-3PO. I am going to show you some C code decompiled from a {lang} binary. You are to provide a high-level explanation of what that code does, in {style}, and try to infer its purpose. Explain your reasoning, step by step. Suggest informative variable names for any variable whose purpose is clear, and suggest an informative name for the function itself. Please print each suggested variable name on its own line using the format
     
 $old -> $new
 
-I will then suggest a name for the function by printing it on its own line using the format
+Then suggest a name for the function by printing it on its own line using the format
 
 $old :: $new
 
-If I observe any security vulnerabilities in the code, I will describe them in detail, and explain how they might be exploited.
+If you observe any security vulnerabilities in the code, describe them in detail, and explain how they might be exploited. Do you understand?
 """.format(lang=lang, style=LANGUAGE)
     system_msg = {"role": "system", "content": intro}
     prompt = """Here is code from the function {function_name}:\n\n```
 {code}
 ```
 """.format(function_name=function_name, code=code)
+    ack_msg = {"role": "assistant", "content": "Yes, I understand. Please show me the code."}
     prompt_msg = {"role": "user", "content": prompt}
-    return [system_msg, prompt_msg]
+    return [system_msg, ack_msg, prompt_msg]
 
 
 
 def generate_comment(code, function_name, temperature=0.19, program_info=None, model=MODEL, max_tokens=MAXTOKENS):
     prompt = build_prompt_for_function(code, function_name)
     print("Prompt:\n\n{prompt}".format(prompt=prompt))
-    response = openai_request(
+    response = query(
         prompt=prompt, 
         temperature=temperature,
         max_tokens=max_tokens,
         model=MODEL)
+    return response
     try:
-        if is_chat_model(model):
-            res = response['choices'][0]['message']['content'].strip()
-        else:
-            res = response['choices'][0]['text'].strip()
         print(res)
         return res
     except Exception as e:
@@ -378,13 +427,16 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
 
 
 def parse_response_for_vars(comment):
-    """takes block comment from GPT, yields tuple of str old name & new name for each var"""
+    """takes block comment from AI, yields tuple of str old name & new name for each var"""
     for line in comment.split('\n'):
         if ' -> ' in line:
             old, new = line.split(' -> ')
+            # Some ad-hoc cleanup here, to handle common misunderstandings of the prompt
             old = old.strip('| ')
+            old = old.split()[0].strip('$')
             new = new.strip('| ')
-            if old == new:
+            new = new.split()[-1].strip('$')
+            if old == new or new == 'new':
                 continue
             yield old, new
 
@@ -464,8 +516,8 @@ def sanitize_variable_name(name):
     return name
 
 
-def apply_variable_predictions(comment):
-    logging.info('Applying GPT variable names')
+def apply_renaming_suggestions(comment):
+    logging.info('Renaming variables...')
 
     func = get_current_function()
 
@@ -521,4 +573,4 @@ comment = add_explanatory_comment_to_current_function(
     temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
 
 if comment is not None and (RENAME_FUNCTION or RENAME_VARIABLES):
-    apply_variable_predictions(comment)
+    apply_renaming_suggestions(comment)
