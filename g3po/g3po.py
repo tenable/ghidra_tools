@@ -8,8 +8,11 @@
 ##########################################################################################
 # Script Configuration
 ##########################################################################################
-# MODEL = "gpt-4" # Choose which large language model we query
+#MODEL = "claude-v1.2" # Choose which large language model we query
 MODEL = "gpt-3.5-turbo"  # Choose which large language model we query
+# If you have an OpenAI API key, gpt-3.5-turbo gives you the best bang for your buck.
+# Use gpt-4 for slightly higher quality results, at a higher cost.
+# If you have an Anthropic API key, try claude-v1.2, which also seems to work quite well.
 # Set higher for more adventurous comments, lower for more conservative
 TEMPERATURE = 0.05
 TIMEOUT = 600         # How many seconds should we wait for a response from OpenAI?
@@ -249,13 +252,14 @@ def anthropic_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODE
         role = 'Assistant' if message['role'] == 'assistant' else 'Human'
         formatted_prompt.append(
                 "\n\n{role}: {content}".format(role=role, content=message['content']))
-    formatted_prompt = ''.join(formatted_prompt)
+    formatted_prompt = ''.join(formatted_prompt) + "\n\nAssistant: "
+    print(formatted_prompt)
     ## Send the request
     host = "api.anthropic.com"
     path = "/v1/complete"
     headers = {
             "Content-Type": "application/json",
-            "Authorization": "Bearer {anthropic_api_key}".format(anthropic_api_key=get_api_key())
+            "x-api-key": get_api_key()
     }
     data = {
         "model": model,
@@ -341,23 +345,24 @@ def lang_description():
 
 def build_prompt_for_function(code, function_name):
     lang = lang_description()
-    intro = """I am a reverse engineering assistant named G-3PO. When I am presented with C code decompiled from a {lang} binary, I will provide a high-level explanation of what that code does, in {style}, and speculate as to its purpose. I will explain my reasoning. I will suggest informative variable names for any variable whose purpose is clear, and I will suggest an informative name for the function itself. I will print each suggested variable name on its own line using the format
+    intro = """You are a reverse engineering assistant named G-3PO. I am going to show you some C code decompiled from a {lang} binary. You are to provide a high-level explanation of what that code does, in {style}, and try to infer its purpose. Explain your reasoning, step by step. Suggest informative variable names for any variable whose purpose is clear, and suggest an informative name for the function itself. Please print each suggested variable name on its own line using the format
     
 $old -> $new
 
-I will then suggest a name for the function by printing it on its own line using the format
+Then suggest a name for the function by printing it on its own line using the format
 
 $old :: $new
 
-If I observe any security vulnerabilities in the code, I will describe them in detail, and explain how they might be exploited.
+If you observe any security vulnerabilities in the code, describe them in detail, and explain how they might be exploited. Do you understand?
 """.format(lang=lang, style=LANGUAGE)
     system_msg = {"role": "system", "content": intro}
     prompt = """Here is code from the function {function_name}:\n\n```
 {code}
 ```
 """.format(function_name=function_name, code=code)
+    ack_msg = {"role": "assistant", "content": "Yes, I understand. Please show me the code."}
     prompt_msg = {"role": "user", "content": prompt}
-    return [system_msg, prompt_msg]
+    return [system_msg, ack_msg, prompt_msg]
 
 
 
@@ -422,13 +427,16 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
 
 
 def parse_response_for_vars(comment):
-    """takes block comment from GPT, yields tuple of str old name & new name for each var"""
+    """takes block comment from AI, yields tuple of str old name & new name for each var"""
     for line in comment.split('\n'):
         if ' -> ' in line:
             old, new = line.split(' -> ')
+            # Some ad-hoc cleanup here, to handle common misunderstandings of the prompt
             old = old.strip('| ')
+            old = old.split()[0].strip('$')
             new = new.strip('| ')
-            if old == new:
+            new = new.split()[-1].strip('$')
+            if old == new or new == 'new':
                 continue
             yield old, new
 
@@ -508,8 +516,8 @@ def sanitize_variable_name(name):
     return name
 
 
-def apply_variable_predictions(comment):
-    logging.info('Applying GPT variable names')
+def apply_renaming_suggestions(comment):
+    logging.info('Renaming variables...')
 
     func = get_current_function()
 
@@ -565,4 +573,4 @@ comment = add_explanatory_comment_to_current_function(
     temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
 
 if comment is not None and (RENAME_FUNCTION or RENAME_VARIABLES):
-    apply_variable_predictions(comment)
+    apply_renaming_suggestions(comment)
