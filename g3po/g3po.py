@@ -42,7 +42,6 @@ G3POASCII = r"""
          | | |
         /_]_[_\
 """
-TRY_TO_SUMMARIZE_LONG_FUNCTIONS = False  # very experimental, use at your own risk
 SEND_ASSEMBLY = False
 ##########################################################################################
 
@@ -154,7 +153,7 @@ def get_api_key():
             home = os.environ["HOME"]
             keyfile = ".{v}_api_key".format(v=vendor.lower())
             with open(os.path.join(home, keyfile)) as f:
-                line = f.read().strip()
+                line = f.readline().strip()
                 return line.split("=")[1].strip('"\'')
         except Exception as e:
             logging.error(
@@ -428,25 +427,27 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
 
 def parse_response_for_vars(comment):
     """takes block comment from AI, yields tuple of str old name & new name for each var"""
+    # The LLM will sometimes wrap variable names in backticks, and sometimes prepend a dollar sign.
+    # We want to ignore those artifacts.
+    regex = re.compile(r'[`$]?([A-Za-z_][A-Za-z_0-9]*)`? -> [`$]?([A-Za-z_][A-Za-z_0-9]*)`?')
     for line in comment.split('\n'):
-        if ' -> ' in line:
-            old, new = line.split(' -> ')
-            # Some ad-hoc cleanup here, to handle common misunderstandings of the prompt
-            old = old.strip('| ')
-            old = old.split()[0].strip('$')
-            new = new.strip('| ')
-            new = new.split()[-1].strip('$')
+        m = regex.search(line)
+        if m:
+            old, new = m.groups()
+            print("Found suggestion to rename {old} to {new}".format(old=old, new=new))
             if old == new or new == 'new':
                 continue
             yield old, new
 
 
-def parse_response_for_name(comment):
+def parse_response_for_function_name(comment):
     """takes block comment from GPT, yields new function name"""
+    regex = re.compile('[`$]?([A-Za-z_][A-Za-z_0-9]*)`? :: [$`]?([A-Za-z_][A-Za-z_0-9]*)`?')
     for line in comment.split('\n'):
-        if ' :: ' in line:
-            _, new = line.split(' :: ')
-            new = new.strip('| ')
+        m = regex.search(line)
+        if m:
+            print("Renaming function to {new}".format(new=m.group(2)))
+            _, new = m.groups()
             return new
 
 
@@ -493,27 +494,16 @@ def rename_high_variable(hv, new_name, data_type=None):
     # if running in Jython, we'll need to use unicode
     try:
         new_name = unicode(new_name)
-    except NameError:
+    except NameError as e:
+        print("Error converting new name to unicode: {}".format(e))
         pass
-    return HighFunctionDBUtil.updateDBVariable(hv,
-                                               new_name,
-                                               data_type,
-                                               SourceType.ANALYSIS)
+    res = HighFunctionDBUtil.updateDBVariable(hv,
+                                              new_name,
+                                              data_type,
+                                              SourceType.ANALYSIS)
+    print("Renamed {} to {} with result {}".format(hv, new_name, res))
+    return res
 
-
-def sanitize_variable_name(name):
-    """takes a variable name and returns a sanitized version that can be used as a variable name in Ghidra
-    name: str, variable name"""
-    if not name:
-        return name
-    # strip out any characters that aren't letters, numbers, spaces, or underscores
-    name = re.sub(r'[^a-zA-Z0-9_ ]', '', name)
-    # take the first "word", in case ChatGPT added extra text behind the new variable name
-    name = list(filter(lambda x: len(x) > 0, name.split(" ")))[0]
-    # if the first character is a number, prepend an underscore
-    if name[0].isdigit():
-        name = 'x' + name
-    return name
 
 
 def apply_renaming_suggestions(comment):
@@ -537,13 +527,10 @@ def apply_renaming_suggestions(comment):
         lsm = high_func.getLocalSymbolMap()
         symbols = lsm.getSymbols()
         symbols = {var.getName(): var for var in symbols}
+        print("Symbols: {}".format(symbols))
 
         for old, new in parse_response_for_vars(comment):
-            old = sanitize_variable_name(old)
-            new = sanitize_variable_name(new)
-            if not new:
-                logging.error('Could not parse new name for {}'.format(old))
-                continue
+            print("Renaming {old} to {new}".format(old=old, new=new))
             if re.match(r"^DAT_[0-9a-f]+$", old):  # Globals with default names
                 # suffix = old.split('_')[-1] # on second thought, we don't want stale address info
                 # in a non-dynamic variable name
@@ -563,7 +550,7 @@ def apply_renaming_suggestions(comment):
 
     if func.getName().startswith('FUN_') or RENAME_FUNCTION:
         new_func_name = sanitize_variable_name(
-            parse_response_for_name(comment))
+            parse_response_for_function_name(comment))
         if new_func_name:
             func.setName(new_func_name, SourceType.USER_DEFINED)
             logging.debug('G3P0 renamed function to {}'.format(new_func_name))
