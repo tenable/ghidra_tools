@@ -9,6 +9,7 @@
 # Script Configuration
 ##########################################################################################
 MODEL = "gpt-3.5-turbo"  # Choose which large language model we query
+MODEL = askChoice("Model", "Please choose a language model to query", ["text-davinci-003", "gpt-3.5-turbo", "gpt-4", "claude-v1.2"], "gpt-3.5-turbo")
 # If you have an OpenAI API key, gpt-3.5-turbo gives you the best bang for your buck.
 # Use gpt-4 for slightly higher quality results, at a higher cost.
 # If you have an Anthropic API key, try claude-v1.2, which also seems to work quite well.
@@ -158,7 +159,7 @@ def get_api_key():
         except Exception as e:
             logging.error(
                 "Could not find {v} API key. Please set the {v}_API_KEY environment variable. Errors: {ke}, {e}".format(ke=ke, e=e, v=vendor))
-            raise e
+            sys.exit(1)
 
 
 def flatten_list(l):
@@ -500,12 +501,17 @@ def rename_high_variable(symbols, old_name, new_name, data_type=None):
         new_name = unicode(new_name)
     except NameError:
         pass
-    res = HighFunctionDBUtil.updateDBVariable(hv,
-                                              new_name,
-                                              data_type,
-                                              SourceType.ANALYSIS)
-    logging.debug("Renamed {} to {}".format(old_name, new_name, res))
-    return res
+    try:
+        res = HighFunctionDBUtil.updateDBVariable(hv,
+                                                  new_name,
+                                                  data_type,
+                                                  SourceType.ANALYSIS)
+        logging.debug("Renamed {} to {}".format(old_name, new_name, res))
+        return res
+    except DuplicateNameException as e:
+        logging.error("Failed to rename {} to {}: {}".format(
+            old_name, new_name, e))
+        return None
 
 
 
