@@ -8,8 +8,8 @@
 ##########################################################################################
 # Script Configuration
 ##########################################################################################
-#MODEL = "claude-v1.2" # Choose which large language model we query
 MODEL = "gpt-3.5-turbo"  # Choose which large language model we query
+MODEL = askChoice("Model", "Please choose a language model to query", ["text-davinci-003", "gpt-3.5-turbo", "gpt-4", "claude-v1.2"], "gpt-3.5-turbo")
 # If you have an OpenAI API key, gpt-3.5-turbo gives you the best bang for your buck.
 # Use gpt-4 for slightly higher quality results, at a higher cost.
 # If you have an Anthropic API key, try claude-v1.2, which also seems to work quite well.
@@ -42,7 +42,6 @@ G3POASCII = r"""
          | | |
         /_]_[_\
 """
-TRY_TO_SUMMARIZE_LONG_FUNCTIONS = False  # very experimental, use at your own risk
 SEND_ASSEMBLY = False
 ##########################################################################################
 
@@ -56,6 +55,7 @@ import logging
 from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL
 import json
 import os
+import sys
 import re
 import ghidra
 from ghidra.app.script import GhidraScript
@@ -154,12 +154,12 @@ def get_api_key():
             home = os.environ["HOME"]
             keyfile = ".{v}_api_key".format(v=vendor.lower())
             with open(os.path.join(home, keyfile)) as f:
-                line = f.read().strip()
+                line = f.readline().strip()
                 return line.split("=")[1].strip('"\'')
         except Exception as e:
             logging.error(
                 "Could not find {v} API key. Please set the {v}_API_KEY environment variable. Errors: {ke}, {e}".format(ke=ke, e=e, v=vendor))
-            raise e
+            sys.exit(1)
 
 
 def flatten_list(l):
@@ -236,8 +236,10 @@ def openai_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
     if res is None:
         logging.error("OpenAI request failed!")
         return None
-    logging.info("OpenAI request succeeded!")
-    logging.info("Response: {res}".format(res=res))
+    logging.info("OpenAI responded: {res}".format(res=res))
+    if 'error' in res:
+        logging.error("OpenAI error: {error}".format(error=res['error']['message']))
+        return None
     if is_chat_model(model):
         response = res['choices'][0]['message']['content'].strip()
     else:
@@ -253,7 +255,7 @@ def anthropic_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODE
         formatted_prompt.append(
                 "\n\n{role}: {content}".format(role=role, content=message['content']))
     formatted_prompt = ''.join(formatted_prompt) + "\n\nAssistant: "
-    print(formatted_prompt)
+    logging.debug(formatted_prompt)
     ## Send the request
     host = "api.anthropic.com"
     path = "/v1/complete"
@@ -278,7 +280,7 @@ def anthropic_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODE
 
 
 def get_current_function():
-    print("currentAddress: {currentAddress}".format(currentAddress=currentAddress))
+    logging.debug("currentAddress: {currentAddress}".format(currentAddress=currentAddress))
     listing = currentProgram.getListing()
     function = listing.getFunctionContaining(currentAddress)
     return function
@@ -368,19 +370,13 @@ If you observe any security vulnerabilities in the code, describe them in detail
 
 def generate_comment(code, function_name, temperature=0.19, program_info=None, model=MODEL, max_tokens=MAXTOKENS):
     prompt = build_prompt_for_function(code, function_name)
-    print("Prompt:\n\n{prompt}".format(prompt=prompt))
+    logging.debug("Prompt:\n\n{prompt}".format(prompt=prompt))
     response = query(
         prompt=prompt, 
         temperature=temperature,
         max_tokens=max_tokens,
         model=MODEL)
     return response
-    try:
-        print(res)
-        return res
-    except Exception as e:
-        logging.error("Failed to get response: {e}".format(e=e))
-        return None
 
 
 def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS):
@@ -392,6 +388,7 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
     old_comment = function.getComment()
     if old_comment is not None:
         if OVERRIDE_COMMENTS or SOURCE in old_comment:
+            logging.info("Removing old comment.")
             function.setComment(None)
         else:
             logging.info("Function {function_name} already has a comment".format(
@@ -409,7 +406,7 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
                                temperature=temperature, model=model, max_tokens=max_tokens)
     if comment is None:
         logging.error("Failed to generate comment")
-        return
+        sys.exit(1)
     if G3POSAY:
         comment = g3posay(comment)
     else:
@@ -423,30 +420,32 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
         return
     logging.info("Added comment to function: {function_name}".format(
         function_name=function.getName()))
-    return comment
+    return comment, code
 
 
 def parse_response_for_vars(comment):
     """takes block comment from AI, yields tuple of str old name & new name for each var"""
+    # The LLM will sometimes wrap variable names in backticks, and sometimes prepend a dollar sign.
+    # We want to ignore those artifacts.
+    regex = re.compile(r'[`$]?([A-Za-z_][A-Za-z_0-9]*)`? -> [`$]?([A-Za-z_][A-Za-z_0-9]*)`?')
     for line in comment.split('\n'):
-        if ' -> ' in line:
-            old, new = line.split(' -> ')
-            # Some ad-hoc cleanup here, to handle common misunderstandings of the prompt
-            old = old.strip('| ')
-            old = old.split()[0].strip('$')
-            new = new.strip('| ')
-            new = new.split()[-1].strip('$')
+        m = regex.search(line)
+        if m:
+            old, new = m.groups()
+            logging.debug("Found suggestion to rename {old} to {new}".format(old=old, new=new))
             if old == new or new == 'new':
                 continue
             yield old, new
 
 
-def parse_response_for_name(comment):
+def parse_response_for_function_name(comment):
     """takes block comment from GPT, yields new function name"""
+    regex = re.compile('[`$]?([A-Za-z_][A-Za-z_0-9]*)`? :: [$`]?([A-Za-z_][A-Za-z_0-9]*)`?')
     for line in comment.split('\n'):
-        if ' :: ' in line:
-            _, new = line.split(' :: ')
-            new = new.strip('| ')
+        m = regex.search(line)
+        if m:
+            logging.debug("Renaming function to {new}".format(new=m.group(2)))
+            _, new = m.groups()
             return new
 
 
@@ -484,46 +483,49 @@ def rename_data(old_name, new_name):
     logging.debug('GP3O renamed Data {} to {}'.format(old_name, new_name))
 
 
-def rename_high_variable(hv, new_name, data_type=None):
+def rename_high_variable(symbols, old_name, new_name, data_type=None):
     """takes a high variable object, a new name, and, optionally, a data type
     and sets the name and data type of the high variable in the program database"""
 
+    if old_name not in symbols:
+        logging.debug('GP3O wanted to rename variable {} to {}, but no variable found'.format(
+            old_name, new_name))
+        return
+    hv = symbols[old_name]
+
     if data_type is None:
         data_type = hv.getDataType()
-    # if running in Jython, we'll need to use unicode
+
+    # if running in Jython, we may need to ensure that the new name is in unicode
     try:
         new_name = unicode(new_name)
     except NameError:
         pass
-    return HighFunctionDBUtil.updateDBVariable(hv,
-                                               new_name,
-                                               data_type,
-                                               SourceType.ANALYSIS)
+    try:
+        res = HighFunctionDBUtil.updateDBVariable(hv,
+                                                  new_name,
+                                                  data_type,
+                                                  SourceType.ANALYSIS)
+        logging.debug("Renamed {} to {}".format(old_name, new_name, res))
+        return res
+    except DuplicateNameException as e:
+        logging.error("Failed to rename {} to {}: {}".format(
+            old_name, new_name, e))
+        return None
 
 
-def sanitize_variable_name(name):
-    """takes a variable name and returns a sanitized version that can be used as a variable name in Ghidra
-    name: str, variable name"""
-    if not name:
-        return name
-    # strip out any characters that aren't letters, numbers, spaces, or underscores
-    name = re.sub(r'[^a-zA-Z0-9_ ]', '', name)
-    # take the first "word", in case ChatGPT added extra text behind the new variable name
-    name = list(filter(lambda x: len(x) > 0, name.split(" ")))[0]
-    # if the first character is a number, prepend an underscore
-    if name[0].isdigit():
-        name = 'x' + name
-    return name
 
-
-def apply_renaming_suggestions(comment):
+def apply_renaming_suggestions(comment, code):
     logging.info('Renaming variables...')
 
     func = get_current_function()
+    func_name = func.getName()
+    new_func_name = None
 
     if RENAME_VARIABLES:
         raw_vars = [v for v in func.getAllVariables()]
         variables = {var.getName(): var for var in raw_vars}
+        logging.debug("Variables: {}".format(variables))
 
         # John coming in clutch again
         # https://github.com/NationalSecurityAgency/ghidra/issues/2143#issuecomment-665300865
@@ -537,13 +539,9 @@ def apply_renaming_suggestions(comment):
         lsm = high_func.getLocalSymbolMap()
         symbols = lsm.getSymbols()
         symbols = {var.getName(): var for var in symbols}
+        logging.debug("Symbols: {}".format(symbols))
 
         for old, new in parse_response_for_vars(comment):
-            old = sanitize_variable_name(old)
-            new = sanitize_variable_name(new)
-            if not new:
-                logging.error('Could not parse new name for {}'.format(old))
-                continue
             if re.match(r"^DAT_[0-9a-f]+$", old):  # Globals with default names
                 # suffix = old.split('_')[-1] # on second thought, we don't want stale address info
                 # in a non-dynamic variable name
@@ -554,23 +552,28 @@ def apply_renaming_suggestions(comment):
                     logging.error('Failed to rename data: {}'.format(e))
             elif old in symbols and symbols[old] is not None:
                 try:
-                    rename_high_variable(symbols[old], new)
+                    rename_high_variable(symbols, old, new)
                 except Exception as e:
                     logging.error('Failed to rename variable: {}'.format(e))
             else:
-                logging.debug(
-                    "GP3O wanted to rename variable {} to {}, but shan't".format(old, new))
+                # check for hallucination
+                if old not in code:
+                    logging.error("G3PO wanted to rename variable {} to {}, but it may have been hallucinating.".format(old, new))
+                elif old == func_name:
+                    new_func_name = new
+                else:
+                    logging.error("GP3O wanted to rename variable {old} to {new}, but {old} was not found in the symbol table.".format(old=old, new=new))
 
     if func.getName().startswith('FUN_') or RENAME_FUNCTION:
-        new_func_name = sanitize_variable_name(
-            parse_response_for_name(comment))
+        fn = parse_response_for_function_name(comment)
+        new_func_name = fn or new_func_name # it may have been named with variable renaming syntax
         if new_func_name:
             func.setName(new_func_name, SourceType.USER_DEFINED)
             logging.debug('G3P0 renamed function to {}'.format(new_func_name))
 
 
-comment = add_explanatory_comment_to_current_function(
-    temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
+comment, code = add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
 
 if comment is not None and (RENAME_FUNCTION or RENAME_VARIABLES):
-    apply_renaming_suggestions(comment)
+    apply_renaming_suggestions(comment, code)
+
