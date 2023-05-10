@@ -8,7 +8,6 @@
 ##########################################################################################
 # Script Configuration
 ##########################################################################################
-#MODEL = "claude-v1.2" # Choose which large language model we query
 MODEL = "gpt-3.5-turbo"  # Choose which large language model we query
 # If you have an OpenAI API key, gpt-3.5-turbo gives you the best bang for your buck.
 # Use gpt-4 for slightly higher quality results, at a higher cost.
@@ -55,6 +54,7 @@ import logging
 from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL
 import json
 import os
+import sys
 import re
 import ghidra
 from ghidra.app.script import GhidraScript
@@ -235,8 +235,10 @@ def openai_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODEL):
     if res is None:
         logging.error("OpenAI request failed!")
         return None
-    logging.info("OpenAI request succeeded!")
-    logging.info("Response: {res}".format(res=res))
+    logging.info("OpenAI responded: {res}".format(res=res))
+    if 'error' in res:
+        logging.error("OpenAI error: {error}".format(error=res['error']['message']))
+        return None
     if is_chat_model(model):
         response = res['choices'][0]['message']['content'].strip()
     else:
@@ -252,7 +254,7 @@ def anthropic_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODE
         formatted_prompt.append(
                 "\n\n{role}: {content}".format(role=role, content=message['content']))
     formatted_prompt = ''.join(formatted_prompt) + "\n\nAssistant: "
-    print(formatted_prompt)
+    logging.debug(formatted_prompt)
     ## Send the request
     host = "api.anthropic.com"
     path = "/v1/complete"
@@ -277,7 +279,7 @@ def anthropic_request(prompt, temperature=0.19, max_tokens=MAXTOKENS, model=MODE
 
 
 def get_current_function():
-    print("currentAddress: {currentAddress}".format(currentAddress=currentAddress))
+    logging.debug("currentAddress: {currentAddress}".format(currentAddress=currentAddress))
     listing = currentProgram.getListing()
     function = listing.getFunctionContaining(currentAddress)
     return function
@@ -367,19 +369,13 @@ If you observe any security vulnerabilities in the code, describe them in detail
 
 def generate_comment(code, function_name, temperature=0.19, program_info=None, model=MODEL, max_tokens=MAXTOKENS):
     prompt = build_prompt_for_function(code, function_name)
-    print("Prompt:\n\n{prompt}".format(prompt=prompt))
+    logging.debug("Prompt:\n\n{prompt}".format(prompt=prompt))
     response = query(
         prompt=prompt, 
         temperature=temperature,
         max_tokens=max_tokens,
         model=MODEL)
     return response
-    try:
-        print(res)
-        return res
-    except Exception as e:
-        logging.error("Failed to get response: {e}".format(e=e))
-        return None
 
 
 def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS):
@@ -391,6 +387,7 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
     old_comment = function.getComment()
     if old_comment is not None:
         if OVERRIDE_COMMENTS or SOURCE in old_comment:
+            logging.info("Removing old comment.")
             function.setComment(None)
         else:
             logging.info("Function {function_name} already has a comment".format(
@@ -408,7 +405,7 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
                                temperature=temperature, model=model, max_tokens=max_tokens)
     if comment is None:
         logging.error("Failed to generate comment")
-        return
+        sys.exit(1)
     if G3POSAY:
         comment = g3posay(comment)
     else:
@@ -422,7 +419,7 @@ def add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, m
         return
     logging.info("Added comment to function: {function_name}".format(
         function_name=function.getName()))
-    return comment
+    return comment, code
 
 
 def parse_response_for_vars(comment):
@@ -434,7 +431,7 @@ def parse_response_for_vars(comment):
         m = regex.search(line)
         if m:
             old, new = m.groups()
-            print("Found suggestion to rename {old} to {new}".format(old=old, new=new))
+            logging.debug("Found suggestion to rename {old} to {new}".format(old=old, new=new))
             if old == new or new == 'new':
                 continue
             yield old, new
@@ -446,7 +443,7 @@ def parse_response_for_function_name(comment):
     for line in comment.split('\n'):
         m = regex.search(line)
         if m:
-            print("Renaming function to {new}".format(new=m.group(2)))
+            logging.debug("Renaming function to {new}".format(new=m.group(2)))
             _, new = m.groups()
             return new
 
@@ -485,35 +482,44 @@ def rename_data(old_name, new_name):
     logging.debug('GP3O renamed Data {} to {}'.format(old_name, new_name))
 
 
-def rename_high_variable(hv, new_name, data_type=None):
+def rename_high_variable(symbols, old_name, new_name, data_type=None):
     """takes a high variable object, a new name, and, optionally, a data type
     and sets the name and data type of the high variable in the program database"""
 
+    if old_name not in symbols:
+        logging.debug('GP3O wanted to rename variable {} to {}, but no variable found'.format(
+            old_name, new_name))
+        return
+    hv = symbols[old_name]
+
     if data_type is None:
         data_type = hv.getDataType()
-    # if running in Jython, we'll need to use unicode
+
+    # if running in Jython, we may need to ensure that the new name is in unicode
     try:
         new_name = unicode(new_name)
-    except NameError as e:
-        print("Error converting new name to unicode: {}".format(e))
+    except NameError:
         pass
     res = HighFunctionDBUtil.updateDBVariable(hv,
                                               new_name,
                                               data_type,
                                               SourceType.ANALYSIS)
-    print("Renamed {} to {} with result {}".format(hv, new_name, res))
+    logging.debug("Renamed {} to {}".format(old_name, new_name, res))
     return res
 
 
 
-def apply_renaming_suggestions(comment):
+def apply_renaming_suggestions(comment, code):
     logging.info('Renaming variables...')
 
     func = get_current_function()
+    func_name = func.getName()
+    new_func_name = None
 
     if RENAME_VARIABLES:
         raw_vars = [v for v in func.getAllVariables()]
         variables = {var.getName(): var for var in raw_vars}
+        logging.debug("Variables: {}".format(variables))
 
         # John coming in clutch again
         # https://github.com/NationalSecurityAgency/ghidra/issues/2143#issuecomment-665300865
@@ -527,10 +533,9 @@ def apply_renaming_suggestions(comment):
         lsm = high_func.getLocalSymbolMap()
         symbols = lsm.getSymbols()
         symbols = {var.getName(): var for var in symbols}
-        print("Symbols: {}".format(symbols))
+        logging.debug("Symbols: {}".format(symbols))
 
         for old, new in parse_response_for_vars(comment):
-            print("Renaming {old} to {new}".format(old=old, new=new))
             if re.match(r"^DAT_[0-9a-f]+$", old):  # Globals with default names
                 # suffix = old.split('_')[-1] # on second thought, we don't want stale address info
                 # in a non-dynamic variable name
@@ -541,23 +546,28 @@ def apply_renaming_suggestions(comment):
                     logging.error('Failed to rename data: {}'.format(e))
             elif old in symbols and symbols[old] is not None:
                 try:
-                    rename_high_variable(symbols[old], new)
+                    rename_high_variable(symbols, old, new)
                 except Exception as e:
                     logging.error('Failed to rename variable: {}'.format(e))
             else:
-                logging.debug(
-                    "GP3O wanted to rename variable {} to {}, but shan't".format(old, new))
+                # check for hallucination
+                if old not in code:
+                    logging.error("G3PO wanted to rename variable {} to {}, but it may have been hallucinating.".format(old, new))
+                elif old == func_name:
+                    new_func_name = new
+                else:
+                    logging.error("GP3O wanted to rename variable {old} to {new}, but {old} was not found in the symbol table.".format(old=old, new=new))
 
     if func.getName().startswith('FUN_') or RENAME_FUNCTION:
-        new_func_name = sanitize_variable_name(
-            parse_response_for_function_name(comment))
+        fn = parse_response_for_function_name(comment)
+        new_func_name = fn or new_func_name # it may have been named with variable renaming syntax
         if new_func_name:
             func.setName(new_func_name, SourceType.USER_DEFINED)
             logging.debug('G3P0 renamed function to {}'.format(new_func_name))
 
 
-comment = add_explanatory_comment_to_current_function(
-    temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
+comment, code = add_explanatory_comment_to_current_function(temperature=0.19, model=MODEL, max_tokens=MAXTOKENS)
 
 if comment is not None and (RENAME_FUNCTION or RENAME_VARIABLES):
-    apply_renaming_suggestions(comment)
+    apply_renaming_suggestions(comment, code)
+
